@@ -11,6 +11,9 @@ import nurbs
 class Stroke(object):
     def paint(self, painter):
         raise Exception("Not implemented")
+    
+    def translate(self, translation):
+        raise Exception("Not implemented")
 
 class SegmentStroke(Stroke):
     def __init__(self):
@@ -27,6 +30,9 @@ class SegmentStroke(Stroke):
         for pt in self.points[1:]:
             path.lineTo(pt)
         painter.drawPath(path)
+
+    def translate(self, translation):
+        self.points = [p + translation for p in self.points]
 
     def recognize_any(self, prefer_straight=False):
         points = [(pt.x(), pt.y()) for pt in self.points]
@@ -49,6 +55,10 @@ class CircularStroke(Stroke):
         self.center_y = 0.0
         self.radius = 0.0
         self.is_finished = False
+
+    def translate(self, translation):
+        self.center_x += translation.x()
+        self.center_y += translation.y()
 
     def paint(self, painter):
         painter.drawEllipse(self.center_x - self.radius, self.center_y - self.radius,
@@ -133,6 +143,9 @@ class BezierStroke(Stroke):
         self.degree = degree
         self.is_finished = False
 
+    def translate(self, translation):
+        self.segments = [s.translate((translation.x(), translation.y())) for s in self.segments]
+
     @classmethod
     def recognize(cls, points, weights, smoothing = 0.1, degree = 3):
         points = np.asarray(points)
@@ -208,29 +221,34 @@ class Canvas(QtWidgets.QWidget):
 
         self._prev_width = None
         self._prev_height = None
+        self._prev_translate = None
 
         self.device_down = False
+        self.prev_pan_pos = None
+        self.translation = QtCore.QPointF(0.0, 0.0)
         self.pixmap = QtGui.QPixmap()
         self._current_stroke = None
         self._redraw_pixmap()
 
     def _new_pixmap(self, w, h):
-        #if (w, h) != (self._prev_width, self._prev_height):
         dpr = self.devicePixelRatioF()
-        print("New pixmap", w, h)
+        #print("New pixmap", w, h)
         pixmap = QtGui.QPixmap(round(self.width() * dpr), round(self.height() * dpr))
+        #if translation:
+            #print("T", translation)
+            #pixmap = pixmap.transformed(QtGui.QTransform.fromTranslate(translation.x(), translation.y()))
         pixmap.setDevicePixelRatio(dpr)
         pixmap.fill(QtCore.Qt.white)
         return pixmap
     
     def _get_pixmap(self, w, h):
         is_empty = False
-        if (w, h) != (self._prev_width, self._prev_height):
+        if self.pixmap is None or (w, h) != (self._prev_width, self._prev_height):
             self.pixmap = self._new_pixmap(w, h)
             self._prev_width, self._prev_height = w, h
             is_empty = True
         return self.pixmap, is_empty
-
+    
     def _setup_painter(self, pixmap):
         painter = QtGui.QPainter(pixmap)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
@@ -265,6 +283,8 @@ class Canvas(QtWidgets.QWidget):
         if not self.strokes:
             return
         stroke = self._current_stroke
+        if stroke is None:
+            return
         prefer_straight = QtWidgets.QApplication.keyboardModifiers() & QtCore.Qt.ShiftModifier
         recognized = stroke.recognize_any(prefer_straight)
         if recognized is not None:
@@ -279,6 +299,7 @@ class Canvas(QtWidgets.QWidget):
         pixmap, is_empty = self._get_pixmap(self.width(), self.height())
         painter = self._setup_painter(pixmap)
         if is_empty:
+            #painter.translate(self.translation)
             self._paint_on_pixmap(painter)
         self._current_stroke.paint(painter)
         self._current_stroke.is_finished = True
@@ -290,29 +311,59 @@ class Canvas(QtWidgets.QWidget):
         self._current_stroke = stroke
         self.update(self.rect())
 
+    def _pan_strokes(self, translation):
+        for stroke in self.strokes:
+            stroke.translate(translation)
+        self._redraw_pixmap()
+
     def tabletEvent(self, ev):
 
         t = ev.type()
+        is_pan = ev.buttons() & QtCore.Qt.MiddleButton
         if t == QtCore.QEvent.TabletPress:
-            self.device_down = True
-            stroke = self._new_stroke()
-            stroke.add_point(ev.posF(), ev.pressure())
-            self._begin_stroke(stroke)
+            if not is_pan:
+                self.device_down = True
+                stroke = self._new_stroke()
+                stroke.add_point(ev.posF() - self.translation, ev.pressure())
+                self._begin_stroke(stroke)
+            else:
+                print("Press")
+                self.prev_pan_pos = ev.posF()
         elif t == QtCore.QEvent.TabletRelease:
-            self.device_down = False
-            recognized = self._recognize_stroke()
-            if recognized is not None:
-                self._update_stroke(recognized)
-            self._end_stroke()
+            if not self.prev_pan_pos and self._current_stroke is not None:
+                self.device_down = False
+                recognized = self._recognize_stroke()
+                if recognized is not None:
+                    self._update_stroke(recognized)
+                self._end_stroke()
+            if self.prev_pan_pos:
+                self.prev_pan_pos = None
         elif t == QtCore.QEvent.TabletMove:
-            if self.device_down:
-                #print(ev.posF())
-                stroke = self._current_stroke
-                stroke.add_point(ev.posF(), ev.pressure())
+            do_update = False
+            if not is_pan:
+                if self.device_down:
+                    #print(ev.posF())
+                    stroke = self._current_stroke
+                    stroke.add_point(ev.posF() - self.translation, ev.pressure())
+                    do_update = True
+
+            if self.prev_pan_pos:
+                self.translation = ev.posF() - self.prev_pan_pos
+                self.prev_pan_pos = ev.posF()
+                self._pan_strokes(self.translation)
+                do_update = True
+            
+            if do_update:
                 self.update()
+
+        #elif t == QtCore.QEvent.MouseButtonPress:
+        #    print("Press")
+        #elif t == QtCore.QEvent.MouseButtonRelease:
+        #    print("Release")
 
     def paintEvent(self, ev):
         painter = QtGui.QPainter(self)
+        #painter.translate(self.translation)
         dpr = self.devicePixelRatioF()
         pixmap_portion = QtCore.QRect(ev.rect().topLeft()*dpr, ev.rect().size()*dpr)
         painter.drawPixmap(ev.rect().topLeft(), self.pixmap, pixmap_portion)
