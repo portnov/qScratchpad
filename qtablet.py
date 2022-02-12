@@ -28,14 +28,16 @@ class SegmentStroke(Stroke):
             path.lineTo(pt)
         painter.drawPath(path)
 
-    def recognize_any(self):
+    def recognize_any(self, prefer_straight=False):
         points = [(pt.x(), pt.y()) for pt in self.points]
-        bezier = BezierStroke.recognize(points, weights=None, smoothing=None, degree=1)
-        if bezier is not None:
-            return bezier
-        bezier = BezierStroke.recognize(points, weights=None, degree=3)
-        if bezier is not None:
-            return bezier
+        if prefer_straight:
+            bezier = BezierStroke.recognize(points, weights=self.weights, smoothing=None, degree=1)
+            if bezier is not None:
+                return bezier
+        else:
+            bezier = BezierStroke.recognize(points, weights=self.weights, smoothing=10.0, degree=3)
+            if bezier is not None:
+                return bezier
         circle = CircularStroke.recognize(points)
         if circle:
             return circle
@@ -123,6 +125,8 @@ class CircularStroke(Stroke):
 
         return None
 
+MIN_WEIGHT = 0.001
+
 class BezierStroke(Stroke):
     def __init__(self, curve, degree = 3):
         self.segments = curve.to_bezier_segments()
@@ -132,6 +136,8 @@ class BezierStroke(Stroke):
     @classmethod
     def recognize(cls, points, weights, smoothing = 0.1, degree = 3):
         points = np.asarray(points)
+        if weights is not None:
+            weights = np.asarray(weights)
         if weights is not None and len(points) != len(weights):
             raise Exception("Number of weights must be equal to number of points")
 
@@ -140,6 +146,7 @@ class BezierStroke(Stroke):
         points = np.r_[points[good], points[-1][np.newaxis]]
         if weights is not None:
             weights = np.r_[weights[good], weights[-1]]
+            weights[abs(weights) < MIN_WEIGHT] = MIN_WEIGHT
 
         points = points.T
 
@@ -161,11 +168,11 @@ class BezierStroke(Stroke):
         degree = tck[2]
 
         if degree == 3:
-            ok = (fp < 0.1)
+            ok = (fp < smoothing)
         elif degree == 1:
             n = len(control_points)
             print("B1", n, fp)
-            ok = (n < 5)# and (fp < 40.0)
+            ok = (n < 30)# and (fp < 40.0)
         else:
             ok = False
 
@@ -258,7 +265,8 @@ class Canvas(QtWidgets.QWidget):
         if not self.strokes:
             return
         stroke = self._current_stroke
-        recognized = stroke.recognize_any()
+        prefer_straight = QtWidgets.QApplication.keyboardModifiers() & QtCore.Qt.ShiftModifier
+        recognized = stroke.recognize_any(prefer_straight)
         if recognized is not None:
             self._current_stroke = recognized
         return recognized
