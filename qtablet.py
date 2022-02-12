@@ -2,8 +2,11 @@
 
 import sys
 import numpy as np
+import scipy.interpolate
 from math import sqrt
 from PyQt5 import QtGui, QtWidgets, QtCore
+
+import nurbs
 
 class Stroke(object):
     def paint(self, painter):
@@ -12,9 +15,12 @@ class Stroke(object):
 class SegmentStroke(Stroke):
     def __init__(self):
         self.points = []
+        self.weights = []
+        self.is_finished = False
 
-    def add_point(self, point):
+    def add_point(self, point, weight):
         self.points.append(point)
+        self.weights.append(weight)
 
     def paint(self, painter):
         path = QtGui.QPainterPath(self.points[0])
@@ -23,14 +29,24 @@ class SegmentStroke(Stroke):
         painter.drawPath(path)
 
     def recognize_any(self):
-        circle = CircularStroke.recognize([(pt.x(), pt.y()) for pt in self.points])
-        return circle
+        points = [(pt.x(), pt.y()) for pt in self.points]
+        bezier = BezierStroke.recognize(points, weights=None, smoothing=None, degree=1)
+        if bezier is not None:
+            return bezier
+        bezier = BezierStroke.recognize(points, weights=None, degree=3)
+        if bezier is not None:
+            return bezier
+        circle = CircularStroke.recognize(points)
+        if circle:
+            return circle
+        print("not recognized")
 
 class CircularStroke(Stroke):
     def __init__(self):
         self.center_x = 0.0
         self.center_y = 0.0
         self.radius = 0.0
+        self.is_finished = False
 
     def paint(self, painter):
         painter.drawEllipse(self.center_x - self.radius, self.center_y - self.radius,
@@ -100,11 +116,79 @@ class CircularStroke(Stroke):
         diam = 2*circle.radius
 
         rel_delta = delta / diam
-        print("D:", delta, rel_delta)
         if delta < 30.0 or rel_delta < 0.1:
+            print("Circle")
+            circle.is_finished = True
             return circle
 
         return None
+
+class BezierStroke(Stroke):
+    def __init__(self, curve, degree = 3):
+        self.segments = curve.to_bezier_segments()
+        self.degree = degree
+        self.is_finished = False
+
+    @classmethod
+    def recognize(cls, points, weights, smoothing = 0.1, degree = 3):
+        points = np.asarray(points)
+        if weights is not None and len(points) != len(weights):
+            raise Exception("Number of weights must be equal to number of points")
+
+        filter_doubles = 0.1
+        good = np.where(np.linalg.norm(np.diff(points, axis=0), axis=1) > filter_doubles)
+        points = np.r_[points[good], points[-1][np.newaxis]]
+        if weights is not None:
+            weights = np.r_[weights[good], weights[-1]]
+
+        points = points.T
+
+        kwargs = dict()
+        kwargs['k'] = degree
+        if smoothing is not None:
+            kwargs['s'] = smoothing
+        kwargs['full_output'] = True
+        if weights is not None:
+            kwargs['w'] = np.asarray(weights)
+
+        result = scipy.interpolate.splprep(points, **kwargs)
+        (tck, u), fp, ier, msg = result[:4]
+        if ier > 0:
+            print(msg)
+            return None
+        knotvector = tck[0]
+        control_points = np.stack(tck[1]).T
+        degree = tck[2]
+
+        if degree == 3:
+            ok = (fp < 0.1)
+        elif degree == 1:
+            n = len(control_points)
+            print("B1", n, fp)
+            ok = (n < 5)# and (fp < 40.0)
+        else:
+            ok = False
+
+        if ok:
+            curve = nurbs.SvNurbsCurve(degree, knotvector, control_points)
+            stroke = BezierStroke(curve, degree)
+            stroke.is_finished = True
+            print("Bezier", degree, len(control_points))
+            return stroke
+
+    def paint(self, painter):
+        if not self.segments:
+            return
+        pt0 = self.segments[0].get_control_points()[0]
+        path = QtGui.QPainterPath(QtCore.QPointF(pt0[0], pt0[1]))
+        for segment in self.segments:
+            if self.degree == 1:
+                pt = segment.get_control_points()[-1]
+                path.lineTo(pt[0], pt[1])
+            elif self.degree == 3:
+                ct_points = [QtCore.QPointF(p[0], p[1]) for p in segment.get_control_points()[1:]]
+                path.cubicTo(ct_points[0], ct_points[1], ct_points[2])
+        painter.drawPath(path)
 
 class Canvas(QtWidgets.QWidget):
     def __init__(self, parent):
@@ -120,28 +204,43 @@ class Canvas(QtWidgets.QWidget):
 
         self.device_down = False
         self.pixmap = QtGui.QPixmap()
-        self._update_pixmap()
+        self._current_stroke = None
+        self._redraw_pixmap()
 
-    def _get_pixmap(self, w, h):
+    def _new_pixmap(self, w, h):
         #if (w, h) != (self._prev_width, self._prev_height):
         dpr = self.devicePixelRatioF()
+        print("New pixmap", w, h)
         pixmap = QtGui.QPixmap(round(self.width() * dpr), round(self.height() * dpr))
         pixmap.setDevicePixelRatio(dpr)
         pixmap.fill(QtCore.Qt.white)
         return pixmap
+    
+    def _get_pixmap(self, w, h):
+        is_empty = False
+        if (w, h) != (self._prev_width, self._prev_height):
+            self.pixmap = self._new_pixmap(w, h)
+            self._prev_width, self._prev_height = w, h
+            is_empty = True
+        return self.pixmap, is_empty
 
-    def _update_pixmap(self):
-        pixmap = self._get_pixmap(self.width(), self.height())
+    def _setup_painter(self, pixmap):
         painter = QtGui.QPainter(pixmap)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setPen(QtCore.Qt.black)
+        return painter
+
+    def _redraw_pixmap(self):
+        pixmap = self._new_pixmap(self.width(), self.height())
+        painter = self._setup_painter(pixmap)
         self._paint_on_pixmap(painter)
         painter.end()
         self.pixmap = pixmap
 
     def _paint_on_pixmap(self, painter):
-        painter.setRenderHint(QtGui.QPainter.Antialiasing)
-        painter.setPen(QtCore.Qt.black)
         for stroke in self.strokes:
-            stroke.paint(painter)
+            if stroke.is_finished:
+                stroke.paint(painter)
 
     def _get_last_stroke(self):
         if self.strokes:
@@ -153,20 +252,34 @@ class Canvas(QtWidgets.QWidget):
 
     def _new_stroke(self):
         stroke = SegmentStroke()
-        self.strokes.append(stroke)
-        return self.strokes[-1]
+        return stroke
 
     def _recognize_stroke(self):
         if not self.strokes:
             return
-        stroke = self.strokes[-1]
+        stroke = self._current_stroke
         recognized = stroke.recognize_any()
-        if recognized:
-            self.strokes[-1] = recognized
-        return (recognized is not None)
+        if recognized is not None:
+            self._current_stroke = recognized
+        return recognized
+
+    def _begin_stroke(self, stroke):
+        self._current_stroke = stroke
+
+    def _end_stroke(self):
+        self.strokes.append(self._current_stroke)
+        pixmap, is_empty = self._get_pixmap(self.width(), self.height())
+        painter = self._setup_painter(pixmap)
+        if is_empty:
+            self._paint_on_pixmap(painter)
+        self._current_stroke.paint(painter)
+        self._current_stroke.is_finished = True
+        self.pixmap = pixmap
+        self._current_stroke = None
+        self.update(self.rect())
     
-    def _update(self):
-        self._update_pixmap()
+    def _update_stroke(self, stroke):
+        self._current_stroke = stroke
         self.update(self.rect())
 
     def tabletEvent(self, ev):
@@ -174,23 +287,29 @@ class Canvas(QtWidgets.QWidget):
         t = ev.type()
         if t == QtCore.QEvent.TabletPress:
             self.device_down = True
-            self._new_stroke().add_point(ev.posF())
+            stroke = self._new_stroke()
+            stroke.add_point(ev.posF(), ev.pressure())
+            self._begin_stroke(stroke)
         elif t == QtCore.QEvent.TabletRelease:
             self.device_down = False
             recognized = self._recognize_stroke()
-            if recognized:
-                self._update()
+            if recognized is not None:
+                self._update_stroke(recognized)
+            self._end_stroke()
         elif t == QtCore.QEvent.TabletMove:
             if self.device_down:
                 #print(ev.posF())
-                self._get_last_stroke().add_point(ev.posF())
-                self._update()
+                stroke = self._current_stroke
+                stroke.add_point(ev.posF(), ev.pressure())
+                self.update()
 
     def paintEvent(self, ev):
         painter = QtGui.QPainter(self)
         dpr = self.devicePixelRatioF()
         pixmap_portion = QtCore.QRect(ev.rect().topLeft()*dpr, ev.rect().size()*dpr)
         painter.drawPixmap(ev.rect().topLeft(), self.pixmap, pixmap_portion)
+        if self._current_stroke is not None:
+            self._current_stroke.paint(painter)
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
