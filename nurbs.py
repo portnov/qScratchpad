@@ -121,6 +121,51 @@ class SvNurbsBasisFunctions(object):
 class CantInsertKnotException(Exception):
     pass
 
+class BoundingBox(object):
+    def __init__(self, x0, y0, width, height):
+        if not isinstance(x0, (float, int)):
+            raise ValueError(f"x0 = {x0} is not a number")
+        if not isinstance(y0, (float, int)):
+            raise ValueError(f"y0 = {y0} is not a number")
+        if not isinstance(width, (float, int)):
+            raise ValueError(f"width = {width} is not a number")
+        if not isinstance(height, (float, int)):
+            raise ValueError(f"height = {height} is not a number")
+        self.x0 = x0
+        self.y0 = y0
+        self.width = width
+        self.height = height
+
+    def __repr__(self):
+        return f"<x {self.x0}, y {self.y0}, W {self.width}, H {self.height}>"
+
+    @staticmethod
+    def calc(points):
+        points = np.asarray(points)
+        _min = points.min(axis=0)
+        _max = points.max(axis=0)
+        box = BoundingBox(_min[0], _min[1], _max[0] - _min[0], _max[1] - _min[1])
+        return box
+
+    def union(self, other):
+        x0 = min(self.x0, other.x0)
+        y0 = min(self.y0, other.y0)
+        x1 = max(self.x0 + self.width, other.x0 + other.width)
+        y1 = max(self.y0 + self.height, other.y0 + other.height)
+        width = x1 - x0
+        height = y1 - y0
+        box = BoundingBox(x0, y0, width, height)
+        return box
+
+    @staticmethod
+    def union_list(boxes):
+        if not boxes:
+            return BoundingBox(0, 0, 100, 100)
+        result = boxes[0]
+        for box in boxes[1:]:
+            result = result.union(box)
+        return result
+
 class SvNurbsCurve(object):
     def __init__(self, degree, knotvector, control_points, weights=None, normalize_knots=False):
         self.control_points = np.asarray(control_points) # (k, NDIM)
@@ -135,6 +180,15 @@ class SvNurbsCurve(object):
         self.degree = degree
         self.basis = SvNurbsBasisFunctions(knotvector)
         self.u_bounds = None # take from knotvector
+
+    @staticmethod
+    def make_bezier(degree, control_points):
+        control_points = np.asarray(control_points)
+        knotvector = sv_knotvector.generate(degree, len(control_points))
+        return SvNurbsCurve(degree, knotvector, control_points)
+
+    def get_bounding_box(self):
+        return BoundingBox.calc(self.control_points)
 
     def transformed(self, matrix, dv):
         matrix = np.asarray(matrix)

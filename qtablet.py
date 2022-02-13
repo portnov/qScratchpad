@@ -4,6 +4,8 @@ import sys
 import numpy as np
 import scipy.interpolate
 from math import sqrt
+import json
+import gzip
 from PyQt5 import QtGui, QtWidgets, QtCore
 
 import nurbs
@@ -15,11 +17,34 @@ class Stroke(object):
     def transformed(self, transform):
         raise Exception("Not implemented")
 
-class SegmentStroke(Stroke):
+    def to_json(self):
+        raise Exception("Not implemented")
+
+    def get_bounding_box(self):
+        raise Exception("Not implemented")
+
+class PolylineStroke(Stroke):
     def __init__(self):
         self.points = []
         self.weights = []
         self.is_finished = False
+
+    def to_json(self):
+        return dict(points = [(p.x(), p.y()) for p in self.points],
+                    weights = self.weights,
+                    type = 'polyline')
+
+    @classmethod
+    def from_json(cls, data):
+        stroke = PolylineStroke()
+        stroke.points = [QtCore.QPointF(*p) for p in data['points']]
+        stroke.weights = data['weights']
+        stroke.is_finished = True
+        return stroke
+
+    def get_bounding_box(self):
+        points = np.asarray([(p.x(), p.y()) for p in self.points])
+        return nurbs.BoundingBox.calc(points)
 
     def add_point(self, point, weight):
         self.points.append(point)
@@ -32,7 +57,7 @@ class SegmentStroke(Stroke):
         painter.drawPath(path)
 
     def transformed(self, transform):
-        stroke = SegmentStroke()
+        stroke = PolylineStroke()
         stroke.points = [transform.map(p) for p in self.points]
         stroke.weights = self.weights
         stroke.is_finished = self.is_finished
@@ -60,6 +85,21 @@ class CircularStroke(Stroke):
         self.center_y = 0.0
         self.radius = 0.0
         self.is_finished = False
+
+    def to_json(self):
+        return dict(center = [self.center_x, self.center_y], radius = self.radius, type='circle')
+
+    @classmethod
+    def from_json(cls, data):
+        stroke = CircularStroke()
+        stroke.center_x, stroke_center_y = data['center']
+        stroke.radius = data['radius']
+        stroke.is_finished = True
+        return stroke
+
+    def get_bounding_box(self):
+        return nurbs.BoundingBox(self.center_x - self.radius, self.center_y - self.radius,
+                            2*self.radius, 2*self.radius)
 
     def transformed(self, transform):
         stroke = CircularStroke()
@@ -157,6 +197,24 @@ class BezierStroke(Stroke):
         self.degree = degree
         self.is_finished = False
 
+    def to_json(self):
+        return dict(degree = self.degree,
+                    segments = [segment.get_control_points().tolist() for segment in self.segments],
+                    type = 'bezier')
+
+    @classmethod
+    def from_json(cls, data):
+        degree = data['degree']
+
+        stroke = BezierStroke(degree = degree)
+        stroke.segments = [nurbs.SvNurbsCurve.make_bezier(degree, s) for s in data['segments']]
+        stroke.is_finished = True
+
+        return stroke
+
+    def get_bounding_box(self):
+        return nurbs.BoundingBox.union_list([segment.get_bounding_box() for segment in self.segments])
+
     def transformed(self, transform):
         stroke = BezierStroke(degree=self.degree)
         dx, dy = transform.dx(), transform.dy()
@@ -237,6 +295,8 @@ class BezierStroke(Stroke):
                 path.cubicTo(ct_points[0], ct_points[1], ct_points[2])
         painter.drawPath(path)
 
+type_to_class = dict(polyline = PolylineStroke, circle = CircularStroke, bezier = BezierStroke)
+
 class Canvas(QtWidgets.QWidget):
     def __init__(self, parent):
         QtWidgets.QWidget.__init__(self, parent)
@@ -262,6 +322,24 @@ class Canvas(QtWidgets.QWidget):
         self._current_stroke = None
         self._redraw_pixmap()
 
+    def to_json(self):
+        return [stroke.to_json() for stroke in self.strokes]
+    
+    def from_json(self, data):
+        strokes = []
+        for item in data:
+            cls = type_to_class[item['type']]
+            stroke = cls.from_json(item)
+            #print(stroke.to_json())
+            strokes.append(stroke)
+        
+        self.strokes = strokes
+        self._redraw_pixmap()
+        self.update()
+
+    def _bounding_box(self):
+        return nurbs.BoundingBox.union_list([stroke.get_bounding_box() for stroke in self.strokes])
+
     def _new_pixmap(self, w, h):
         dpr = self.devicePixelRatioF()
         #print("New pixmap", w, h)
@@ -277,6 +355,15 @@ class Canvas(QtWidgets.QWidget):
             self._prev_width, self._prev_height = w, h
             is_empty = True
         return self.pixmap, is_empty
+
+    def to_image(self):
+        bbox = self._bounding_box()
+        img = QtGui.QImage(bbox.width, bbox.height, QtGui.QImage.Format_RGB32)
+        img.fill(QtCore.Qt.white)
+        painter = self._setup_painter(img)
+        self._paint_on_pixmap(painter, QtGui.QTransform.fromTranslate(-bbox.x0, -bbox.y0))
+        painter.end()
+        return img
     
     def _setup_painter(self, pixmap):
         painter = QtGui.QPainter(pixmap)
@@ -292,24 +379,23 @@ class Canvas(QtWidgets.QWidget):
         painter.end()
         self.pixmap = pixmap
 
-    def _paint_on_pixmap(self, painter, translated=True):
+    def _paint_on_pixmap(self, painter, transformation=None):
+        if transformation is None:
+            transformation = self.transformation
         for stroke in self.strokes:
             if stroke.is_finished:
-                if translated:
-                    stroke.transformed(self.transformation).paint(painter)
-                else:
-                    stroke.paint(painter)
+                stroke.transformed(transformation).paint(painter)
 
     def _get_last_stroke(self):
         if self.strokes:
             return self.strokes[-1]
         else:
-            stroke = SegmentStroke()
+            stroke = PolylineStroke()
             self.strokes.append(stroke)
             return self.strokes[-1]
 
     def _new_stroke(self):
-        stroke = SegmentStroke()
+        stroke = PolylineStroke()
         return stroke
 
     def _recognize_stroke(self):
@@ -455,9 +541,35 @@ class Canvas(QtWidgets.QWidget):
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         QtWidgets.QMainWindow.__init__(self)
+        self.toolbar = self.addToolBar("File")
         self.canvas = Canvas(self)
         self.setCentralWidget(self.canvas)
         QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_CompressHighFrequencyEvents)
+
+        load = self.toolbar.addAction("Load")
+        load.triggered.connect(self._on_load)
+        save = self.toolbar.addAction("Save")
+        save.triggered.connect(self._on_save)
+        export = self.toolbar.addAction("Export")
+        export.triggered.connect(self._on_export)
+
+    def _on_load(self, checked=False):
+        with gzip.open("scratchbook.json.gz") as gz:
+            text = gz.read()
+            data = json.loads(text.decode('utf-8'))
+            self.canvas.from_json(data)
+        print("Loaded")
+
+    def _on_save(self, checked=False):
+        with gzip.open("scratchbook.json.gz", 'wb') as gz:
+            data = json.dumps(self.canvas.to_json()).encode('utf-8')
+            gz.write(data)
+        print("Saved")
+
+    def _on_export(self, checked=False):
+        img = self.canvas.to_image()
+        img.save("scratchbook.png")
+        print("Exported")
 
 class Application(QtWidgets.QApplication):
     def __init__(self, *args, **kwargs):

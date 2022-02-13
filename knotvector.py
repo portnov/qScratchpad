@@ -121,3 +121,52 @@ def from_multiplicity(pairs):
         result.extend([u] * count)
     return np.array(result)
 
+def generate(degree, num_ctrlpts, clamped=True):
+    """ Generates an equally spaced knot vector.
+
+    It uses the following equality to generate knot vector: :math:`m = n + p + 1`
+
+    where;
+
+    * :math:`p`, degree
+    * :math:`n + 1`, number of control points
+    * :math:`m + 1`, number of knots
+
+    Keyword Arguments:
+
+        * ``clamped``: Flag to choose from clamped or unclamped knot vector options. *Default: True*
+
+    :param degree: degree
+    :type degree: int
+    :param num_ctrlpts: number of control points
+    :type num_ctrlpts: int
+    :return: knot vector
+    :rtype: np.array of shape (m+1,)
+    """
+    if degree == 0 or num_ctrlpts == 0:
+        raise ValueError("Input values should be different than zero.")
+
+    # Number of repetitions at the start and end of the array
+    num_repeat = degree
+
+    # Number of knots in the middle
+    num_segments = num_ctrlpts - (degree + 1)
+
+    if not clamped:
+        # No repetitions at the start and end
+        num_repeat = 0
+        # Should conform the rule: m = n + p + 1
+        num_segments = degree + num_ctrlpts - 1
+
+    # First knots
+    knot_vector = [0.0 for _ in range(0, num_repeat)]
+
+    # Middle knots
+    knot_vector += list(np.linspace(0.0, 1.0, num_segments + 2))
+
+    # Last knots
+    knot_vector += [1.0 for _ in range(0, num_repeat)]
+
+    # Return auto-generated knot vector
+    return np.array(knot_vector)
+
