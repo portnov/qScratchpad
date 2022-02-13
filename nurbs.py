@@ -123,7 +123,7 @@ class CantInsertKnotException(Exception):
 
 class SvNurbsCurve(object):
     def __init__(self, degree, knotvector, control_points, weights=None, normalize_knots=False):
-        self.control_points = np.array(control_points) # (k, NDIM)
+        self.control_points = np.asarray(control_points) # (k, NDIM)
         k = len(control_points)
         if weights is not None:
             self.weights = np.array(weights) # (k, )
@@ -136,9 +136,10 @@ class SvNurbsCurve(object):
         self.basis = SvNurbsBasisFunctions(knotvector)
         self.u_bounds = None # take from knotvector
 
-    def transformed(self, dv, zoom):
+    def transformed(self, matrix, dv):
+        matrix = np.asarray(matrix)
         dv = np.asarray(dv)
-        new_control_points = zoom * self.control_points + dv
+        new_control_points = [matrix @ pt + dv for pt in self.control_points]
         return SvNurbsCurve(self.degree, self.knotvector, new_control_points, self.weights)
 
     def is_rational(self, tolerance=1e-6):

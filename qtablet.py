@@ -12,7 +12,7 @@ class Stroke(object):
     def paint(self, painter):
         raise Exception("Not implemented")
     
-    def transformed(self, translation, zoom):
+    def transformed(self, transform):
         raise Exception("Not implemented")
 
 class SegmentStroke(Stroke):
@@ -31,9 +31,9 @@ class SegmentStroke(Stroke):
             path.lineTo(pt)
         painter.drawPath(path)
 
-    def transformed(self, translation, zoom):
+    def transformed(self, transform):
         stroke = SegmentStroke()
-        stroke.points = [zoom*p + translation for p in self.points]
+        stroke.points = [transform.map(p) for p in self.points]
         stroke.weights = self.weights
         stroke.is_finished = self.is_finished
         return stroke
@@ -60,11 +60,13 @@ class CircularStroke(Stroke):
         self.radius = 0.0
         self.is_finished = False
 
-    def transformed(self, translation, zoom):
+    def transformed(self, transform):
         stroke = CircularStroke()
-        stroke.center_x = zoom*self.center_x + translation.x()
-        stroke.center_y = zoom*self.center_y + translation.y()
-        stroke.radius = zoom *self.radius
+        ct = transform.map(QtCore.QPointF(self.center_x, self.center_y))
+        stroke.center_x = ct.x()
+        stroke.center_y = ct.y()
+        scale = sqrt(transform.determinant())
+        stroke.radius = scale *self.radius
         stroke.is_finished = self.is_finished
         return stroke
 
@@ -137,7 +139,7 @@ class CircularStroke(Stroke):
 
         rel_delta = delta / diam
         if delta < 30.0 or rel_delta < 0.1:
-            print("Circle")
+            print(f"Circle: {circle.center_x}, {circle.center_y}, {circle.radius}")
             circle.is_finished = True
             return circle
 
@@ -154,15 +156,19 @@ class BezierStroke(Stroke):
         self.degree = degree
         self.is_finished = False
 
-    def transformed(self, translation, zoom):
+    def transformed(self, transform):
         stroke = BezierStroke(degree=self.degree)
-        stroke.segments = [s.transformed((translation.x(), translation.y()), zoom) for s in self.segments]
+        dx, dy = transform.dx(), transform.dy()
+        matrix = np.array([[transform.m11(), transform.m12()], [transform.m21(), transform.m22()]])
+        stroke.segments = [s.transformed(matrix, (dx, dy)) for s in self.segments]
         stroke.is_finished = self.is_finished
         return stroke
 
     @classmethod
     def recognize(cls, points, weights, smoothing = 0.1, degree = 3):
         points = np.asarray(points)
+        if len(points) < degree+1:
+            return None
         if weights is not None:
             weights = np.asarray(weights)
         if weights is not None and len(points) != len(weights):
@@ -238,12 +244,12 @@ class Canvas(QtWidgets.QWidget):
         self._prev_translate = None
         self.panned_pixmap = None
 
-        self.zoom = 1.0
         self.device_down = False
         self.pan_start_pos = None
+        self.prev_pan_pos = None
         self.current_pan_start = None
         self.current_pan_translation = None
-        self.translation = QtCore.QPointF(0.0, 0.0)
+        self.transformation = QtGui.QTransform()
         self.pixmap = QtGui.QPixmap()
         self._current_stroke = None
         self._redraw_pixmap()
@@ -252,9 +258,6 @@ class Canvas(QtWidgets.QWidget):
         dpr = self.devicePixelRatioF()
         #print("New pixmap", w, h)
         pixmap = QtGui.QPixmap(round(self.width() * dpr), round(self.height() * dpr))
-        #if translation:
-            #print("T", translation)
-            #pixmap = pixmap.transformed(QtGui.QTransform.fromTranslate(translation.x(), translation.y()))
         pixmap.setDevicePixelRatio(dpr)
         pixmap.fill(QtCore.Qt.white)
         return pixmap
@@ -284,7 +287,7 @@ class Canvas(QtWidgets.QWidget):
         for stroke in self.strokes:
             if stroke.is_finished:
                 if translated:
-                    stroke.transformed(self.translation, self.zoom).paint(painter)
+                    stroke.transformed(self.transformation).paint(painter)
                 else:
                     stroke.paint(painter)
 
@@ -320,9 +323,8 @@ class Canvas(QtWidgets.QWidget):
         pixmap, is_empty = self._get_pixmap(self.width(), self.height())
         painter = self._setup_painter(pixmap)
         if is_empty:
-            #painter.translate(self.translation)
             self._paint_on_pixmap(painter)
-        self._current_stroke.transformed(self.translation, self.zoom).paint(painter)
+        self._current_stroke.transformed(self.transformation).paint(painter)
         self._current_stroke.is_finished = True
         self.pixmap = pixmap
         self._current_stroke = None
@@ -332,17 +334,12 @@ class Canvas(QtWidgets.QWidget):
         self._current_stroke = stroke
         self.update(self.rect())
 
-    def _pan_strokes(self, translation):
-        pixmap = self._new_pixmap(self.width(), self.height())
-        painter = self._setup_painter(pixmap)
-        painter.translate(translation)
-        painter.drawPixmap(0, 0, self.panned_pixmap)
-        painter.end()
-        self.pixmap = pixmap
-
     def _to_scene(self, pos):
-        #return pos / self.zoom - self.translation
-        return (pos - self.translation) / self.zoom
+        inv, ok = self.transformation.inverted()
+        return inv.map(pos)
+    
+    def translation(self):
+        return QtCore.QPointF(self.transformation.dx(), self.transformation.dy())
 
     def tabletEvent(self, ev):
 
@@ -355,14 +352,12 @@ class Canvas(QtWidgets.QWidget):
                 stroke.add_point(self._to_scene(ev.posF()), ev.pressure())
                 self._begin_stroke(stroke)
             else:
-                self.pan_start_pos = ev.posF() - self.translation
+                self.pan_start_pos = ev.posF() - self.translation()
+                self.prev_pan_pos = ev.posF()
                 self.current_pan_start = ev.posF()
 
                 self._redraw_pixmap()
                 self.panned_pixmap = self.pixmap
-#                 painter = self._setup_painter(self.panned_pixmap)
-#                 painter.translate(-self.translation)
-#                 self._paint_on_pixmap(painter, translated=True)
 
         elif t == QtCore.QEvent.TabletRelease:
             if not self.pan_start_pos and self._current_stroke is not None:
@@ -373,9 +368,11 @@ class Canvas(QtWidgets.QWidget):
                 self._end_stroke()
             if self.pan_start_pos:
                 self.pan_start_pos = None
+                self.prev_pan_pos = None
                 self.panned_pixmap = None
                 self.current_pan_start = None
                 self.current_pan_translation = None
+                print("T", self.transformation.dx(), self.transformation.dy())
                 self._redraw_pixmap()
 
         elif t == QtCore.QEvent.TabletMove:
@@ -388,9 +385,11 @@ class Canvas(QtWidgets.QWidget):
                     do_update = True
 
             if self.pan_start_pos:
-                self.translation = ev.posF() - self.pan_start_pos
+                delta = ev.posF() - self.prev_pan_pos
+                delta = delta / sqrt(self.transformation.determinant())
+                self.prev_pan_pos = ev.posF()
+                self.transformation = self.transformation.translate(delta.x(), delta.y())
                 self.current_pan_translation = ev.posF() - self.current_pan_start
-                #self._pan_strokes(self.translation)
                 do_update = True
             
             if do_update:
@@ -399,13 +398,12 @@ class Canvas(QtWidgets.QWidget):
     def wheelEvent(self, ev):
       angle = ev.angleDelta().y()
       z = 1.5 ** (angle / 360.0)
-      self.zoom *= z
+      self.transformation = self.transformation.scale(z, z)
       self._redraw_pixmap()
       self.update()
 
     def paintEvent(self, ev):
         painter = QtGui.QPainter(self)
-        #painter.translate(self.translation)
         dpr = self.devicePixelRatioF()
         #pixmap_portion = QtCore.QRect(ev.rect().topLeft()*dpr, ev.rect().size()*dpr)
         if self.panned_pixmap is not None:
@@ -415,7 +413,7 @@ class Canvas(QtWidgets.QWidget):
         else:
             painter.drawPixmap(ev.rect().topLeft(), self.pixmap)#, pixmap_portion)
         if self._current_stroke is not None:
-            self._current_stroke.transformed(self.translation, self.zoom).paint(painter)
+            self._current_stroke.transformed(self.transformation).paint(painter)
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
