@@ -12,7 +12,7 @@ class Stroke(object):
     def paint(self, painter):
         raise Exception("Not implemented")
     
-    def translate(self, translation):
+    def transformed(self, translation, zoom):
         raise Exception("Not implemented")
 
 class SegmentStroke(Stroke):
@@ -31,8 +31,12 @@ class SegmentStroke(Stroke):
             path.lineTo(pt)
         painter.drawPath(path)
 
-    def translate(self, translation):
-        self.points = [p + translation for p in self.points]
+    def transformed(self, translation, zoom):
+        stroke = SegmentStroke()
+        stroke.points = [zoom*p + translation for p in self.points]
+        stroke.weights = self.weights
+        stroke.is_finished = self.is_finished
+        return stroke
 
     def recognize_any(self, prefer_straight=False):
         points = [(pt.x(), pt.y()) for pt in self.points]
@@ -56,9 +60,13 @@ class CircularStroke(Stroke):
         self.radius = 0.0
         self.is_finished = False
 
-    def translate(self, translation):
-        self.center_x += translation.x()
-        self.center_y += translation.y()
+    def transformed(self, translation, zoom):
+        stroke = CircularStroke()
+        stroke.center_x = zoom*self.center_x + translation.x()
+        stroke.center_y = zoom*self.center_y + translation.y()
+        stroke.radius = zoom *self.radius
+        stroke.is_finished = self.is_finished
+        return stroke
 
     def paint(self, painter):
         painter.drawEllipse(self.center_x - self.radius, self.center_y - self.radius,
@@ -138,13 +146,19 @@ class CircularStroke(Stroke):
 MIN_WEIGHT = 0.001
 
 class BezierStroke(Stroke):
-    def __init__(self, curve, degree = 3):
-        self.segments = curve.to_bezier_segments()
+    def __init__(self, curve=None, degree = 3):
+        if curve is not None:
+            self.segments = curve.to_bezier_segments()
+        else:
+            self.segments = []
         self.degree = degree
         self.is_finished = False
 
-    def translate(self, translation):
-        self.segments = [s.translate((translation.x(), translation.y())) for s in self.segments]
+    def transformed(self, translation, zoom):
+        stroke = BezierStroke(degree=self.degree)
+        stroke.segments = [s.transformed((translation.x(), translation.y()), zoom) for s in self.segments]
+        stroke.is_finished = self.is_finished
+        return stroke
 
     @classmethod
     def recognize(cls, points, weights, smoothing = 0.1, degree = 3):
@@ -225,6 +239,7 @@ class Canvas(QtWidgets.QWidget):
 
         self.device_down = False
         self.prev_pan_pos = None
+        self.pan_start_pos = None
         self.translation = QtCore.QPointF(0.0, 0.0)
         self.pixmap = QtGui.QPixmap()
         self._current_stroke = None
@@ -265,7 +280,7 @@ class Canvas(QtWidgets.QWidget):
     def _paint_on_pixmap(self, painter):
         for stroke in self.strokes:
             if stroke.is_finished:
-                stroke.paint(painter)
+                stroke.transformed(self.translation, 1.0).paint(painter)
 
     def _get_last_stroke(self):
         if self.strokes:
@@ -301,7 +316,7 @@ class Canvas(QtWidgets.QWidget):
         if is_empty:
             #painter.translate(self.translation)
             self._paint_on_pixmap(painter)
-        self._current_stroke.paint(painter)
+        self._current_stroke.transformed(self.translation, 1.0).paint(painter)
         self._current_stroke.is_finished = True
         self.pixmap = pixmap
         self._current_stroke = None
@@ -312,8 +327,6 @@ class Canvas(QtWidgets.QWidget):
         self.update(self.rect())
 
     def _pan_strokes(self, translation):
-        for stroke in self.strokes:
-            stroke.translate(translation)
         self._redraw_pixmap()
 
     def tabletEvent(self, ev):
@@ -327,10 +340,10 @@ class Canvas(QtWidgets.QWidget):
                 stroke.add_point(ev.posF() - self.translation, ev.pressure())
                 self._begin_stroke(stroke)
             else:
-                print("Press")
-                self.prev_pan_pos = ev.posF()
+                self.prev_pan_pos = ev.posF() - self.translation
+                self.pan_start_pos = ev.posF() - self.translation
         elif t == QtCore.QEvent.TabletRelease:
-            if not self.prev_pan_pos and self._current_stroke is not None:
+            if not self.pan_start_pos and self._current_stroke is not None:
                 self.device_down = False
                 recognized = self._recognize_stroke()
                 if recognized is not None:
@@ -338,6 +351,7 @@ class Canvas(QtWidgets.QWidget):
                 self._end_stroke()
             if self.prev_pan_pos:
                 self.prev_pan_pos = None
+                self.pan_start_pos = None
         elif t == QtCore.QEvent.TabletMove:
             do_update = False
             if not is_pan:
@@ -348,7 +362,7 @@ class Canvas(QtWidgets.QWidget):
                     do_update = True
 
             if self.prev_pan_pos:
-                self.translation = ev.posF() - self.prev_pan_pos
+                self.translation = ev.posF() - self.pan_start_pos
                 self.prev_pan_pos = ev.posF()
                 self._pan_strokes(self.translation)
                 do_update = True
@@ -365,10 +379,10 @@ class Canvas(QtWidgets.QWidget):
         painter = QtGui.QPainter(self)
         #painter.translate(self.translation)
         dpr = self.devicePixelRatioF()
-        pixmap_portion = QtCore.QRect(ev.rect().topLeft()*dpr, ev.rect().size()*dpr)
-        painter.drawPixmap(ev.rect().topLeft(), self.pixmap, pixmap_portion)
+        #pixmap_portion = QtCore.QRect(ev.rect().topLeft()*dpr, ev.rect().size()*dpr)
+        painter.drawPixmap(ev.rect().topLeft(), self.pixmap)#, pixmap_portion)
         if self._current_stroke is not None:
-            self._current_stroke.paint(painter)
+            self._current_stroke.transformed(self.translation, 1.0).paint(painter)
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):

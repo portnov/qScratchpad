@@ -136,9 +136,9 @@ class SvNurbsCurve(object):
         self.basis = SvNurbsBasisFunctions(knotvector)
         self.u_bounds = None # take from knotvector
 
-    def translate(self, dv):
+    def transformed(self, dv, zoom):
         dv = np.asarray(dv)
-        new_control_points = self.control_points + dv
+        new_control_points = zoom * self.control_points + dv
         return SvNurbsCurve(self.degree, self.knotvector, new_control_points, self.weights)
 
     def is_rational(self, tolerance=1e-6):
