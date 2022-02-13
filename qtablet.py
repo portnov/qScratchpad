@@ -398,7 +398,8 @@ class Canvas(QtWidgets.QWidget):
     def wheelEvent(self, ev):
       angle = ev.angleDelta().y()
       z = 1.5 ** (angle / 360.0)
-      self.transformation = self.transformation.scale(z, z)
+      pos = self._to_scene(ev.posF())
+      self.transformation = self.transformation.translate(pos.x(), pos.y()).scale(z, z).translate(-pos.x(), -pos.y())
       self._redraw_pixmap()
       self.update()
 
