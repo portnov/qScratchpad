@@ -49,7 +49,7 @@ class SegmentStroke(Stroke):
             if bezier is not None:
                 return bezier
         else:
-            bezier = BezierStroke.recognize(points, weights=self.weights, smoothing=0.03, degree=3)
+            bezier = BezierStroke.recognize(points, weights=self.weights, smoothing=0.01, degree=3)
             if bezier is not None:
                 return bezier
         print("not recognized")
@@ -282,6 +282,7 @@ class Canvas(QtWidgets.QWidget):
         painter = QtGui.QPainter(pixmap)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
         painter.setPen(QtCore.Qt.black)
+        painter.pen().setWidth(2.0)
         return painter
 
     def _redraw_pixmap(self):
@@ -413,7 +414,8 @@ class Canvas(QtWidgets.QWidget):
             ev.ignore()
             return
         is_pan = ev.buttons() & QtCore.Qt.MiddleButton
-        self._on_press(is_pan, ev.pos())
+        pos = QtCore.QPointF(ev.pos())
+        self._on_press(is_pan, pos)
 
     def mouseReleaseEvent(self, ev):
         if self.tablet_used:
@@ -426,7 +428,8 @@ class Canvas(QtWidgets.QWidget):
             ev.ignore()
             return
         is_pan = ev.buttons() & QtCore.Qt.MiddleButton
-        self._on_drag(is_pan, ev.pos())
+        pos = QtCore.QPointF(ev.pos())
+        self._on_drag(is_pan, pos)
 
     def wheelEvent(self, ev):
       angle = ev.angleDelta().y()
