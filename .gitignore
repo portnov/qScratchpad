@@ -1,2 +1,5 @@
 *.swp
 *.log
+__pycache__/
+*.json.gz
+*.png
