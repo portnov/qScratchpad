@@ -248,6 +248,7 @@ class Canvas(QtWidgets.QWidget):
         self.panned_pixmap = None
 
         self.device_down = False
+        self.tablet_used = False
         self.pan_start_pos = None
         self.prev_pan_pos = None
         self.current_pan_start = None
@@ -344,60 +345,84 @@ class Canvas(QtWidgets.QWidget):
     
     def translation(self):
         return QtCore.QPointF(self.transformation.dx(), self.transformation.dy())
+    
+    def _on_press(self, is_pan, pos, pressure=1.0):
+        if not is_pan:
+            self.device_down = True
+            stroke = self._new_stroke()
+            stroke.add_point(self._to_scene(pos), pressure)
+            self._begin_stroke(stroke)
+        else:
+            self.pan_start_pos = pos - self.translation()
+            self.prev_pan_pos = pos
+            self.current_pan_start = pos
+
+            self._redraw_pixmap()
+            self.panned_pixmap = self.pixmap
+
+    def _on_release(self):
+        if not self.pan_start_pos and self._current_stroke is not None:
+            self.device_down = False
+            recognized = self._recognize_stroke()
+            if recognized is not None:
+                self._update_stroke(recognized)
+            self._end_stroke()
+        if self.pan_start_pos:
+            self.pan_start_pos = None
+            self.prev_pan_pos = None
+            self.panned_pixmap = None
+            self.current_pan_start = None
+            self.current_pan_translation = None
+            self._redraw_pixmap()
+
+    def _on_drag(self, is_pan, pos, pressure=1.0):
+        do_update = False
+        if not is_pan:
+            if self.device_down:
+                stroke = self._current_stroke
+                stroke.add_point(self._to_scene(pos), pressure)
+                do_update = True
+
+        if self.pan_start_pos:
+            delta = pos - self.prev_pan_pos
+            delta = delta / sqrt(self.transformation.determinant())
+            self.prev_pan_pos = pos
+            self.transformation = self.transformation.translate(delta.x(), delta.y())
+            self.current_pan_translation = pos - self.current_pan_start
+            do_update = True
+        
+        if do_update:
+            self.update()
 
     def tabletEvent(self, ev):
-
         t = ev.type()
         is_pan = ev.buttons() & QtCore.Qt.MiddleButton
         if t == QtCore.QEvent.TabletPress:
-            if not is_pan:
-                self.device_down = True
-                stroke = self._new_stroke()
-                stroke.add_point(self._to_scene(ev.posF()), ev.pressure())
-                self._begin_stroke(stroke)
-            else:
-                self.pan_start_pos = ev.posF() - self.translation()
-                self.prev_pan_pos = ev.posF()
-                self.current_pan_start = ev.posF()
-
-                self._redraw_pixmap()
-                self.panned_pixmap = self.pixmap
-
+            self._on_press(is_pan, ev.posF(), ev.pressure())
         elif t == QtCore.QEvent.TabletRelease:
-            if not self.pan_start_pos and self._current_stroke is not None:
-                self.device_down = False
-                recognized = self._recognize_stroke()
-                if recognized is not None:
-                    self._update_stroke(recognized)
-                self._end_stroke()
-            if self.pan_start_pos:
-                self.pan_start_pos = None
-                self.prev_pan_pos = None
-                self.panned_pixmap = None
-                self.current_pan_start = None
-                self.current_pan_translation = None
-                print("T", self.transformation.dx(), self.transformation.dy())
-                self._redraw_pixmap()
-
+            self._on_release()
         elif t == QtCore.QEvent.TabletMove:
-            do_update = False
-            if not is_pan:
-                if self.device_down:
-                    #print(ev.posF())
-                    stroke = self._current_stroke
-                    stroke.add_point(self._to_scene(ev.posF()), ev.pressure())
-                    do_update = True
+            self._on_drag(is_pan, ev.posF(), ev.pressure())
 
-            if self.pan_start_pos:
-                delta = ev.posF() - self.prev_pan_pos
-                delta = delta / sqrt(self.transformation.determinant())
-                self.prev_pan_pos = ev.posF()
-                self.transformation = self.transformation.translate(delta.x(), delta.y())
-                self.current_pan_translation = ev.posF() - self.current_pan_start
-                do_update = True
-            
-            if do_update:
-                self.update()
+    def mousePressEvent(self, ev):
+        if self.tablet_used:
+            ev.ignore()
+            return
+        is_pan = ev.buttons() & QtCore.Qt.MiddleButton
+        self._on_press(is_pan, ev.pos())
+
+    def mouseReleaseEvent(self, ev):
+        if self.tablet_used:
+            ev.ignore()
+            return
+        self._on_release()
+
+    def mouseMoveEvent(self, ev):
+        if self.tablet_used:
+            ev.ignore()
+            return
+        is_pan = ev.buttons() & QtCore.Qt.MiddleButton
+        self._on_drag(is_pan, ev.pos())
 
     def wheelEvent(self, ev):
       angle = ev.angleDelta().y()
@@ -427,9 +452,27 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(self.canvas)
         QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_CompressHighFrequencyEvents)
 
+class Application(QtWidgets.QApplication):
+    def __init__(self, *args, **kwargs):
+        QtWidgets.QApplication.__init__(self, *args, **kwargs)
+        self.canvas = None
+
+    def event(self, ev):
+        t = ev.type()
+        if t == QtCore.QEvent.TabletEnterProximity:
+            self.canvas.tablet_used = True
+            print("Tablet on")
+            return True
+        elif t == QtCore.QEvent.TabletLeaveProximity:
+            self.canvas.tablet_used = False
+            print("Tablet off")
+            return True
+        return super().event(ev)
+
 if __name__ == "__main__":
-    app = QtWidgets.QApplication(sys.argv)
+    app = Application(sys.argv)
     window = MainWindow()
+    app.canvas = window.canvas
     window.show()
 
     sys.exit(app.exec_())
