@@ -236,10 +236,12 @@ class Canvas(QtWidgets.QWidget):
         self._prev_width = None
         self._prev_height = None
         self._prev_translate = None
+        self.panned_pixmap = None
 
         self.device_down = False
-        self.prev_pan_pos = None
         self.pan_start_pos = None
+        self.current_pan_start = None
+        self.current_pan_translation = None
         self.translation = QtCore.QPointF(0.0, 0.0)
         self.pixmap = QtGui.QPixmap()
         self._current_stroke = None
@@ -277,10 +279,13 @@ class Canvas(QtWidgets.QWidget):
         painter.end()
         self.pixmap = pixmap
 
-    def _paint_on_pixmap(self, painter):
+    def _paint_on_pixmap(self, painter, translated=True):
         for stroke in self.strokes:
             if stroke.is_finished:
-                stroke.transformed(self.translation, 1.0).paint(painter)
+                if translated:
+                    stroke.transformed(self.translation, 1.0).paint(painter)
+                else:
+                    stroke.paint(painter)
 
     def _get_last_stroke(self):
         if self.strokes:
@@ -327,7 +332,12 @@ class Canvas(QtWidgets.QWidget):
         self.update(self.rect())
 
     def _pan_strokes(self, translation):
-        self._redraw_pixmap()
+        pixmap = self._new_pixmap(self.width(), self.height())
+        painter = self._setup_painter(pixmap)
+        painter.translate(translation)
+        painter.drawPixmap(0, 0, self.panned_pixmap)
+        painter.end()
+        self.pixmap = pixmap
 
     def tabletEvent(self, ev):
 
@@ -340,8 +350,15 @@ class Canvas(QtWidgets.QWidget):
                 stroke.add_point(ev.posF() - self.translation, ev.pressure())
                 self._begin_stroke(stroke)
             else:
-                self.prev_pan_pos = ev.posF() - self.translation
                 self.pan_start_pos = ev.posF() - self.translation
+                self.current_pan_start = ev.posF()
+
+                self._redraw_pixmap()
+                self.panned_pixmap = self.pixmap
+#                 painter = self._setup_painter(self.panned_pixmap)
+#                 painter.translate(-self.translation)
+#                 self._paint_on_pixmap(painter, translated=True)
+
         elif t == QtCore.QEvent.TabletRelease:
             if not self.pan_start_pos and self._current_stroke is not None:
                 self.device_down = False
@@ -349,9 +366,13 @@ class Canvas(QtWidgets.QWidget):
                 if recognized is not None:
                     self._update_stroke(recognized)
                 self._end_stroke()
-            if self.prev_pan_pos:
-                self.prev_pan_pos = None
+            if self.pan_start_pos:
                 self.pan_start_pos = None
+                self.panned_pixmap = None
+                self.current_pan_start = None
+                self.current_pan_translation = None
+                self._redraw_pixmap()
+
         elif t == QtCore.QEvent.TabletMove:
             do_update = False
             if not is_pan:
@@ -361,10 +382,10 @@ class Canvas(QtWidgets.QWidget):
                     stroke.add_point(ev.posF() - self.translation, ev.pressure())
                     do_update = True
 
-            if self.prev_pan_pos:
+            if self.pan_start_pos:
                 self.translation = ev.posF() - self.pan_start_pos
-                self.prev_pan_pos = ev.posF()
-                self._pan_strokes(self.translation)
+                self.current_pan_translation = ev.posF() - self.current_pan_start
+                #self._pan_strokes(self.translation)
                 do_update = True
             
             if do_update:
@@ -380,7 +401,12 @@ class Canvas(QtWidgets.QWidget):
         #painter.translate(self.translation)
         dpr = self.devicePixelRatioF()
         #pixmap_portion = QtCore.QRect(ev.rect().topLeft()*dpr, ev.rect().size()*dpr)
-        painter.drawPixmap(ev.rect().topLeft(), self.pixmap)#, pixmap_portion)
+        if self.panned_pixmap is not None:
+            painter.translate(self.current_pan_translation)
+            painter.drawPixmap(ev.rect().topLeft(), self.panned_pixmap)
+            painter.resetTransform()
+        else:
+            painter.drawPixmap(ev.rect().topLeft(), self.pixmap)#, pixmap_portion)
         if self._current_stroke is not None:
             self._current_stroke.transformed(self.translation, 1.0).paint(painter)
 
