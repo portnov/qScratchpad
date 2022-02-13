@@ -77,7 +77,7 @@ class PolylineStroke(Stroke):
             bezier = BezierStroke.recognize(points, weights=self.weights, smoothing=0.01, degree=3)
             if bezier is not None:
                 return bezier
-        print("not recognized")
+        print(f"polyline {len(self.points)}")
 
 class CircularStroke(Stroke):
     def __init__(self):
@@ -337,6 +337,11 @@ class Canvas(QtWidgets.QWidget):
         self._redraw_pixmap()
         self.update()
 
+    def empty(self):
+        self.strokes = []
+        self._redraw_pixmap()
+        self.update()
+
     def _bounding_box(self):
         return nurbs.BoundingBox.union_list([stroke.get_bounding_box() for stroke in self.strokes])
 
@@ -546,12 +551,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(self.canvas)
         QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_CompressHighFrequencyEvents)
 
+        new = self.toolbar.addAction("New")
+        new.triggered.connect(self._on_new)
         load = self.toolbar.addAction("Load")
         load.triggered.connect(self._on_load)
         save = self.toolbar.addAction("Save")
         save.triggered.connect(self._on_save)
         export = self.toolbar.addAction("Export")
         export.triggered.connect(self._on_export)
+
+    def _on_new(self, checked=False):
+        self.canvas.empty()
 
     def _on_load(self, checked=False):
         with gzip.open("scratchbook.json.gz") as gz:
