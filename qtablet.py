@@ -238,6 +238,7 @@ class Canvas(QtWidgets.QWidget):
         self._prev_translate = None
         self.panned_pixmap = None
 
+        self.zoom = 1.0
         self.device_down = False
         self.pan_start_pos = None
         self.current_pan_start = None
@@ -283,7 +284,7 @@ class Canvas(QtWidgets.QWidget):
         for stroke in self.strokes:
             if stroke.is_finished:
                 if translated:
-                    stroke.transformed(self.translation, 1.0).paint(painter)
+                    stroke.transformed(self.translation, self.zoom).paint(painter)
                 else:
                     stroke.paint(painter)
 
@@ -321,7 +322,7 @@ class Canvas(QtWidgets.QWidget):
         if is_empty:
             #painter.translate(self.translation)
             self._paint_on_pixmap(painter)
-        self._current_stroke.transformed(self.translation, 1.0).paint(painter)
+        self._current_stroke.transformed(self.translation, self.zoom).paint(painter)
         self._current_stroke.is_finished = True
         self.pixmap = pixmap
         self._current_stroke = None
@@ -339,6 +340,10 @@ class Canvas(QtWidgets.QWidget):
         painter.end()
         self.pixmap = pixmap
 
+    def _to_scene(self, pos):
+        #return pos / self.zoom - self.translation
+        return (pos - self.translation) / self.zoom
+
     def tabletEvent(self, ev):
 
         t = ev.type()
@@ -347,7 +352,7 @@ class Canvas(QtWidgets.QWidget):
             if not is_pan:
                 self.device_down = True
                 stroke = self._new_stroke()
-                stroke.add_point(ev.posF() - self.translation, ev.pressure())
+                stroke.add_point(self._to_scene(ev.posF()), ev.pressure())
                 self._begin_stroke(stroke)
             else:
                 self.pan_start_pos = ev.posF() - self.translation
@@ -379,7 +384,7 @@ class Canvas(QtWidgets.QWidget):
                 if self.device_down:
                     #print(ev.posF())
                     stroke = self._current_stroke
-                    stroke.add_point(ev.posF() - self.translation, ev.pressure())
+                    stroke.add_point(self._to_scene(ev.posF()), ev.pressure())
                     do_update = True
 
             if self.pan_start_pos:
@@ -391,10 +396,12 @@ class Canvas(QtWidgets.QWidget):
             if do_update:
                 self.update()
 
-        #elif t == QtCore.QEvent.MouseButtonPress:
-        #    print("Press")
-        #elif t == QtCore.QEvent.MouseButtonRelease:
-        #    print("Release")
+    def wheelEvent(self, ev):
+      angle = ev.angleDelta().y()
+      z = 1.5 ** (angle / 360.0)
+      self.zoom *= z
+      self._redraw_pixmap()
+      self.update()
 
     def paintEvent(self, ev):
         painter = QtGui.QPainter(self)
@@ -408,7 +415,7 @@ class Canvas(QtWidgets.QWidget):
         else:
             painter.drawPixmap(ev.rect().topLeft(), self.pixmap)#, pixmap_portion)
         if self._current_stroke is not None:
-            self._current_stroke.transformed(self.translation, 1.0).paint(painter)
+            self._current_stroke.transformed(self.translation, self.zoom).paint(painter)
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
