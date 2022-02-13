@@ -38,19 +38,20 @@ class SegmentStroke(Stroke):
         stroke.is_finished = self.is_finished
         return stroke
 
-    def recognize_any(self, prefer_straight=False):
+    def recognize_any(self, prefer_straight=False, use_circles=True):
         points = [(pt.x(), pt.y()) for pt in self.points]
+        if use_circles:
+            circle = CircularStroke.recognize(points)
+            if circle:
+                return circle
         if prefer_straight:
             bezier = BezierStroke.recognize(points, weights=self.weights, smoothing=None, degree=1)
             if bezier is not None:
                 return bezier
         else:
-            bezier = BezierStroke.recognize(points, weights=self.weights, smoothing=10.0, degree=3)
+            bezier = BezierStroke.recognize(points, weights=self.weights, smoothing=0.03, degree=3)
             if bezier is not None:
                 return bezier
-        circle = CircularStroke.recognize(points)
-        if circle:
-            return circle
         print("not recognized")
 
 class CircularStroke(Stroke):
@@ -126,24 +127,24 @@ class CircularStroke(Stroke):
         center = C[:2].T[0] + np.array([mean_x, mean_y])
         circle.center_x, circle.center_y = center
 
-        data_r2 = data_x**2 + data_y**2
-        min_r2, max_r2 = data_r2.min(), data_r2.max()
-        delta1 = abs(sqrt(min_r2) - circle.radius)
-        delta2 = abs(sqrt(max_r2) - circle.radius)
-        delta = max(delta1, delta2)
+        delta = abs((data_x**2 + data_y**2).mean() - r2)
+        sigma = sqrt(delta)
 
-        #min_x, max_x = data_x.min(), data_x.max()
-        #min_y, max_y = data_y.min(), data_y.max()
-        #diam = max(max_x - min_x, max_y - min_y)
         diam = 2*circle.radius
 
-        rel_delta = delta / diam
-        if delta < 30.0 or rel_delta < 0.1:
-            print(f"Circle: {circle.center_x}, {circle.center_y}, {circle.radius}")
+        rel_delta = sigma / diam
+        #print(f"C {sigma}, R2={r2}, Diam={diam}, {rel_delta}")
+        if rel_delta < 0.5:
+            print(f"Circle: R {circle.radius}")
             circle.is_finished = True
             return circle
 
         return None
+
+def calc_diameter(points):
+    min_ = points.min(axis=0)
+    max_ = points.max(axis=0)
+    return (max_ - min_).max()
 
 MIN_WEIGHT = 0.001
 
@@ -186,6 +187,7 @@ class BezierStroke(Stroke):
         kwargs = dict()
         kwargs['k'] = degree
         if smoothing is not None:
+            smoothing = smoothing * calc_diameter(points)
             kwargs['s'] = smoothing
         kwargs['full_output'] = True
         if weights is not None:
@@ -201,7 +203,8 @@ class BezierStroke(Stroke):
         degree = tck[2]
 
         if degree == 3:
-            ok = (fp < smoothing)
+            #print("B3", fp, smoothing)
+            ok = (fp < smoothing * 1.5)
         elif degree == 1:
             n = len(control_points)
             print("B1", n, fp)
@@ -310,7 +313,8 @@ class Canvas(QtWidgets.QWidget):
         if stroke is None:
             return
         prefer_straight = QtWidgets.QApplication.keyboardModifiers() & QtCore.Qt.ShiftModifier
-        recognized = stroke.recognize_any(prefer_straight)
+        use_circles = QtWidgets.QApplication.keyboardModifiers() & QtCore.Qt.ControlModifier
+        recognized = stroke.recognize_any(prefer_straight, use_circles)
         if recognized is not None:
             self._current_stroke = recognized
         return recognized
