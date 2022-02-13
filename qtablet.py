@@ -193,7 +193,11 @@ class BezierStroke(Stroke):
         if weights is not None:
             kwargs['w'] = np.asarray(weights)
 
-        result = scipy.interpolate.splprep(points, **kwargs)
+        try:
+            result = scipy.interpolate.splprep(points, **kwargs)
+        except TypeError as e:
+            print(e)
+            return None
         (tck, u), fp, ier, msg = result[:4]
         if ier > 0:
             print(msg)
