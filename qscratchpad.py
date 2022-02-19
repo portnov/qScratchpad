@@ -24,15 +24,26 @@ class Stroke(object):
     def get_bounding_box(self):
         raise Exception("Not implemented")
 
+    def setup_pen(self, painter):
+        pen = painter.pen()
+        pen.setColor(QtCore.Qt.black)
+        scale = sqrt(painter.transform().determinant())
+        w = self.thickness * scale
+        print(f"T {self.thickness}, S {scale}, W {w}")
+        pen.setWidthF(w)
+        painter.setPen(pen)
+
 class PolylineStroke(Stroke):
     def __init__(self):
         self.points = []
         self.weights = []
+        self.thickness = 1.0
         self.is_finished = False
 
     def to_json(self):
         return dict(points = [(p.x(), p.y()) for p in self.points],
                     weights = self.weights,
+                    thickness = self.thickness,
                     type = 'polyline')
 
     @classmethod
@@ -40,6 +51,7 @@ class PolylineStroke(Stroke):
         stroke = PolylineStroke()
         stroke.points = [QtCore.QPointF(*p) for p in data['points']]
         stroke.weights = data['weights']
+        stroke.thickness = data['thickness']
         stroke.is_finished = True
         return stroke
 
@@ -52,6 +64,7 @@ class PolylineStroke(Stroke):
         self.weights.append(weight)
 
     def paint(self, painter):
+        self.setup_pen(painter)
         path = QtGui.QPainterPath(self.points[0])
         for pt in self.points[1:]:
             path.lineTo(pt)
@@ -61,6 +74,7 @@ class PolylineStroke(Stroke):
         stroke = PolylineStroke()
         stroke.points = [transform.map(p) for p in self.points]
         stroke.weights = self.weights
+        stroke.thickness = self.thickness * sqrt(transform.determinant())
         stroke.is_finished = self.is_finished
         return stroke
 
@@ -69,18 +83,22 @@ class PolylineStroke(Stroke):
         if mode == 'circle':
             circle = CircularStroke.recognize(points)
             if circle:
+                circle.thickness = self.thickness
                 return circle
         elif mode == 'rect':
             rect = RectangularStroke.recognize(points)
             if rect is not None:
+                rect.thickness = self.thickness
                 return rect
         elif mode == 'straight':
             bezier = BezierStroke.recognize(points, weights=self.weights, smoothing=None, degree=1)
             if bezier is not None:
+                bezier.thickness = self.thickness
                 return bezier
         else:
             bezier = BezierStroke.recognize(points, weights=self.weights, smoothing=0.01, degree=3)
             if bezier is not None:
+                bezier.thickness = self.thickness
                 return bezier
         print(f"polyline {len(self.points)}")
         return None
@@ -90,16 +108,20 @@ class CircularStroke(Stroke):
         self.center_x = 0.0
         self.center_y = 0.0
         self.radius = 0.0
+        self.thickness = 1.0
         self.is_finished = False
 
     def to_json(self):
-        return dict(center = [self.center_x, self.center_y], radius = self.radius, type='circle')
+        return dict(center = [self.center_x, self.center_y], radius = self.radius,
+                    thickness = self.thickness,
+                    type='circle')
 
     @classmethod
     def from_json(cls, data):
         stroke = CircularStroke()
         stroke.center_x, stroke.center_y = data['center']
         stroke.radius = data['radius']
+        stroke.thickness = data['thickness']
         stroke.is_finished = True
         return stroke
 
@@ -114,10 +136,12 @@ class CircularStroke(Stroke):
         stroke.center_y = ct.y()
         scale = sqrt(transform.determinant())
         stroke.radius = scale *self.radius
+        stroke.thickness = self.thickness * scale
         stroke.is_finished = self.is_finished
         return stroke
 
     def paint(self, painter):
+        self.setup_pen(painter)
         painter.drawEllipse(self.center_x - self.radius, self.center_y - self.radius,
                             2*self.radius, 2*self.radius)
 
@@ -201,11 +225,13 @@ class BezierStroke(Stroke):
         else:
             self.segments = []
         self.degree = degree
+        self.thickness = 1.0
         self.is_finished = False
 
     def to_json(self):
         return dict(degree = self.degree,
                     segments = [segment.get_control_points().tolist() for segment in self.segments],
+                    thickness = self.thickness,
                     type = 'bezier')
 
     @classmethod
@@ -214,6 +240,7 @@ class BezierStroke(Stroke):
 
         stroke = BezierStroke(degree = degree)
         stroke.segments = [nurbs.SvNurbsCurve.make_bezier(degree, s) for s in data['segments']]
+        stroke.thickness = data['thickness']
         stroke.is_finished = True
 
         return stroke
@@ -226,6 +253,7 @@ class BezierStroke(Stroke):
         dx, dy = transform.dx(), transform.dy()
         matrix = np.array([[transform.m11(), transform.m12()], [transform.m21(), transform.m22()]])
         stroke.segments = [s.transformed(matrix, (dx, dy)) for s in self.segments]
+        stroke.thickness = self.thickness * sqrt(transform.determinant())
         stroke.is_finished = self.is_finished
         return stroke
 
@@ -290,6 +318,7 @@ class BezierStroke(Stroke):
     def paint(self, painter):
         if not self.segments:
             return
+        self.setup_pen(painter)
         pt0 = self.segments[0].get_control_points()[0]
         path = QtGui.QPainterPath(QtCore.QPointF(pt0[0], pt0[1]))
         for segment in self.segments:
@@ -307,6 +336,7 @@ class RectangularStroke(Stroke):
         self.center_y = None
         self.width = None
         self.height = None
+        self.thickness = 1.0
         self.is_finished = False
 
     @classmethod
@@ -344,7 +374,9 @@ class RectangularStroke(Stroke):
         return stroke
 
     def to_json(self):
-        return dict(center = [self.center_x, self.center_y], width = self.width, height = self.height, type='rect')
+        return dict(center = [self.center_x, self.center_y], width = self.width, height = self.height,
+                    thickness = self.thickness,
+                    type='rect')
 
     @classmethod
     def from_json(cls, data):
@@ -352,6 +384,7 @@ class RectangularStroke(Stroke):
         stroke.center_x, stroke.center_y = data['center']
         stroke.width = data['width']
         stroke.height = data['height']
+        stroke.thickness = data['thickness']
         stroke.is_finished = True
         return stroke
 
@@ -363,10 +396,12 @@ class RectangularStroke(Stroke):
         scale = sqrt(transform.determinant())
         stroke.width = scale * self.width
         stroke.height = scale * self.height
+        stroke.thickness = self.thickness * scale
         stroke.is_finished = self.is_finished
         return stroke
 
     def paint(self, painter):
+        self.setup_pen(painter)
         painter.drawRect(self.center_x - self.width/2.0, self.center_y - self.height/2.0,
                         self.width, self.height)
 
@@ -456,8 +491,6 @@ class Canvas(QtWidgets.QWidget):
     def _setup_painter(self, pixmap):
         painter = QtGui.QPainter(pixmap)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
-        painter.setPen(QtCore.Qt.black)
-        painter.pen().setWidth(2.0)
         return painter
 
     def _redraw_pixmap(self):
@@ -484,6 +517,7 @@ class Canvas(QtWidgets.QWidget):
 
     def _new_stroke(self):
         stroke = PolylineStroke()
+        stroke.thickness = self.window._get_thickness()
         return stroke
 
     def _recognize_stroke(self):
@@ -525,6 +559,9 @@ class Canvas(QtWidgets.QWidget):
     
     def translation(self):
         return QtCore.QPointF(self.transformation.dx(), self.transformation.dy())
+
+    def scale(self):
+        return sqrt(self.transformation.determinant())
     
     def _on_press(self, is_pan, pos, pressure=1.0):
         if not is_pan:
@@ -565,7 +602,7 @@ class Canvas(QtWidgets.QWidget):
 
         if self.pan_start_pos:
             delta = pos - self.prev_pan_pos
-            delta = delta / sqrt(self.transformation.determinant())
+            delta = delta / self.scale()
             self.prev_pan_pos = pos
             self.transformation = self.transformation.translate(delta.x(), delta.y())
             self.current_pan_translation = pos - self.current_pan_start
@@ -632,9 +669,6 @@ class MainWindow(QtWidgets.QMainWindow):
         QtWidgets.QMainWindow.__init__(self)
         self.setWindowTitle("qScratchpad")
         self.toolbar = self.addToolBar("File")
-        self.canvas = Canvas(self)
-        self.setCentralWidget(self.canvas)
-        QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_CompressHighFrequencyEvents)
 
         new = self.toolbar.addAction(QtGui.QIcon.fromTheme("document-new"), "New")
         new.triggered.connect(self._on_new)
@@ -668,6 +702,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.rect_mode = self.toolbar.addAction("Rectangle")
         self.rect_mode.setCheckable(True)
         mode_group.addAction(self.rect_mode)
+
+        self.toolbar.addSeparator()
+
+        self.thickness_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal, self)
+        self.thickness_slider.setMinimum(0)
+        self.thickness_slider.setMaximum(20)
+        self.toolbar.addWidget(self.thickness_slider)
+
+        self.canvas = Canvas(self)
+        self.setCentralWidget(self.canvas)
+        QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_CompressHighFrequencyEvents)
+
+    def _get_thickness(self):
+        return self.thickness_slider.value()
 
     def _get_mode(self):
         if self.bezier_mode.isChecked():
