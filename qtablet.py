@@ -418,6 +418,13 @@ class Canvas(QtWidgets.QWidget):
         self._redraw_pixmap()
         self.update()
 
+    def undo(self):
+        if not self.strokes:
+            return
+        self.strokes = self.strokes[:-1]
+        self._redraw_pixmap()
+        self.update()
+
     def _bounding_box(self):
         return nurbs.BoundingBox.union_list([stroke.get_bounding_box() for stroke in self.strokes])
 
@@ -639,6 +646,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.toolbar.addSeparator()
 
+        undo = self.toolbar.addAction("Undo")
+        undo.setShortcut(QtGui.QKeySequence("Ctrl+Z"))
+        undo.triggered.connect(self._on_undo)
+
+        self.toolbar.addSeparator()
+
         mode_group = QtWidgets.QActionGroup(self)
         mode_group.setExclusionPolicy(QtWidgets.QActionGroup.ExclusionPolicy.Exclusive)
         self.bezier_mode = self.toolbar.addAction("Bezier")
@@ -687,6 +700,9 @@ class MainWindow(QtWidgets.QMainWindow):
         img = self.canvas.to_image()
         img.save("scratchbook.png")
         print("Exported")
+
+    def _on_undo(self, checked=False):
+        self.canvas.undo()
 
 class Application(QtWidgets.QApplication):
     def __init__(self, *args, **kwargs):
