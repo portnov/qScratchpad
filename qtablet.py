@@ -98,7 +98,7 @@ class CircularStroke(Stroke):
     @classmethod
     def from_json(cls, data):
         stroke = CircularStroke()
-        stroke.center_x, stroke_center_y = data['center']
+        stroke.center_x, stroke.center_y = data['center']
         stroke.radius = data['radius']
         stroke.is_finished = True
         return stroke
@@ -349,7 +349,7 @@ class RectangularStroke(Stroke):
     @classmethod
     def from_json(cls, data):
         stroke = RectangularStroke()
-        stroke.center_x, stroke_center_y = data['center']
+        stroke.center_x, stroke.center_y = data['center']
         stroke.width = data['width']
         stroke.height = data['height']
         stroke.is_finished = True
