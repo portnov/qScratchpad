@@ -519,6 +519,7 @@ class Canvas(QtWidgets.QWidget):
         self.current_pan_start = None
         self.current_pan_translation = None
         self.transformation = QtGui.QTransform()
+        self.current_file_path = None
         self.pixmap = QtGui.QPixmap()
         self._current_stroke = None
         self._redraw_pixmap()
@@ -549,6 +550,26 @@ class Canvas(QtWidgets.QWidget):
         self.strokes = self.strokes[:-1]
         self._redraw_pixmap()
         self.update()
+
+
+    def load(self, path):
+        with gzip.open(path) as gz:
+            text = gz.read()
+            data = json.loads(text.decode('utf-8'))
+            self.from_json(data)
+        self.current_file_path = path
+        print("Loaded")
+
+    def save(self):
+        if not self.current_file_path:
+            raise Exception("This should not be called at this time")
+        self.save_as(self, self.current_file_path)
+
+    def save_as(self, path):
+        with gzip.open(path, 'wb') as gz:
+            data = json.dumps(self.to_json()).encode('utf-8')
+            gz.write(data)
+        print("Saved")
 
     def _bounding_box(self):
         return nurbs.BoundingBox.union_list([stroke.get_bounding_box() for stroke in self.strokes])
@@ -766,6 +787,8 @@ class MainWindow(QtWidgets.QMainWindow):
         load.triggered.connect(self._on_load)
         save = self.toolbar.addAction(QtGui.QIcon.fromTheme("document-save"), "Save")
         save.triggered.connect(self._on_save)
+        save_as = self.toolbar.addAction(QtGui.QIcon.fromTheme("document-save-as"), "Save as...")
+        save_as.triggered.connect(self._on_save_as)
         export = self.toolbar.addAction("Export")
         export.triggered.connect(self._on_export)
 
@@ -830,25 +853,40 @@ class MainWindow(QtWidgets.QMainWindow):
             return None
 
     def _on_new(self, checked=False):
+        self.current_file_path = None
         self.canvas.empty()
 
     def _on_load(self, checked=False):
-        with gzip.open("scratchbook.json.gz") as gz:
-            text = gz.read()
-            data = json.loads(text.decode('utf-8'))
-            self.canvas.from_json(data)
-        print("Loaded")
+        path,_ = QtWidgets.QFileDialog.getOpenFileName(self,
+                    "Open file",
+                    ".",
+                    "qScratchpad doodles (*.json.gz)")
+        if path:
+            self.canvas.load(path)
 
     def _on_save(self, checked=False):
-        with gzip.open("scratchbook.json.gz", 'wb') as gz:
-            data = json.dumps(self.canvas.to_json()).encode('utf-8')
-            gz.write(data)
-        print("Saved")
+        if self.canvas.current_file_path:
+            self.canvas.save()
+        else:
+            self._on_save_as()
+
+    def _on_save_as(self, checked=False):
+        path,_ = QtWidgets.QFileDialog.getSaveFileName(self,
+                    "Save file as...",
+                    ".",
+                    "qScratchpad doodles (*.json.gz)")
+        if path:
+            self.canvas.save_as(path)
 
     def _on_export(self, checked=False):
-        img = self.canvas.to_image()
-        img.save("scratchbook.png")
-        print("Exported")
+        path,_ = QtWidgets.QFileDialog.getSaveFileName(self,
+                    "Export to PNG...",
+                    ".",
+                    "PNG images (*.png)")
+        if path:
+            img = self.canvas.to_image()
+            img.save(path)
+            print("Exported")
 
     def _on_undo(self, checked=False):
         self.canvas.undo()
