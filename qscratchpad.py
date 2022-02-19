@@ -630,6 +630,7 @@ class Canvas(QtWidgets.QWidget):
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         QtWidgets.QMainWindow.__init__(self)
+        self.setWindowTitle("qScratchpad")
         self.toolbar = self.addToolBar("File")
         self.canvas = Canvas(self)
         self.setCentralWidget(self.canvas)
