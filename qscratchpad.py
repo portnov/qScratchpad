@@ -29,7 +29,6 @@ class Stroke(object):
         pen.setColor(QtCore.Qt.black)
         scale = sqrt(painter.transform().determinant())
         w = self.thickness * scale
-        print(f"T {self.thickness}, S {scale}, W {w}")
         pen.setWidthF(w)
         painter.setPen(pen)
 
@@ -95,6 +94,11 @@ class PolylineStroke(Stroke):
             if bezier is not None:
                 bezier.thickness = self.thickness
                 return bezier
+        elif mode == 'segment':
+            segment = SegmentStroke.recognize(points)
+            if segment is not None:
+                segment.thickness = self.thickness
+                return segment
         else:
             bezier = BezierStroke.recognize(points, weights=self.weights, smoothing=0.01, degree=3)
             if bezier is not None:
@@ -330,6 +334,57 @@ class BezierStroke(Stroke):
                 path.cubicTo(ct_points[0], ct_points[1], ct_points[2])
         painter.drawPath(path)
 
+class SegmentStroke(Stroke):
+    def __init__(self):
+        self.p1 = None
+        self.p2 = None
+        self.thickness = 1.0
+        self.is_finished = False
+
+    def get_bounding_box(self):
+        return nurbs.BoundingBox.calc([self.p1, self.p2])
+
+    def transformed(self, transform):
+        p1 = QtCore.QPointF(*self.p1)
+        p2 = QtCore.QPointF(*self.p2)
+        p1 = transform.map(p1)
+        p2 = transform.map(p2)
+        stroke = SegmentStroke()
+        stroke.p1 = np.array([p1.x(), p1.y()])
+        stroke.p2 = np.array([p2.x(), p2.y()])
+        scale = sqrt(transform.determinant())
+        stroke.thickness = self.thickness * scale
+        stroke.is_finished = self.is_finished
+        return stroke
+
+    def to_json(self):
+        return dict(p1 = self.p1.tolist(), p2 = self.p2.tolist(),
+                    thickness = self.thickness,
+                    type = 'segment')
+
+    @classmethod 
+    def from_json(cls, data):
+        stroke = SegmentStroke()
+        stroke.p1 = np.array(data['p1'])
+        stroke.p2 = np.array(data['p2'])
+        stroke.thickness = data['thickness']
+        stroke.is_finished = True
+        return stroke
+    
+    @classmethod
+    def recognize(cls, data):
+        line = nurbs.LineEquation2D.approximate(data)
+        stroke = SegmentStroke()
+        stroke.p1, stroke.p2 = line.projection_endpoints(data)
+        stroke.is_finished = True
+        return stroke
+
+    def paint(self, painter):
+        self.setup_pen(painter)
+        p1 = QtCore.QPointF(*self.p1)
+        p2 = QtCore.QPointF(*self.p2)
+        painter.drawLine(p1, p2)
+
 class RectangularStroke(Stroke):
     def __init__(self):
         self.center_x = None
@@ -338,6 +393,10 @@ class RectangularStroke(Stroke):
         self.height = None
         self.thickness = 1.0
         self.is_finished = False
+
+    def get_bounding_box(self):
+        return nurbs.BoundingBox(self.center_x - self.width/2.0, self.center_y - self.height/2.0,
+                                 self.width, self.height)
 
     @classmethod
     def recognize(cls, points):
@@ -405,7 +464,7 @@ class RectangularStroke(Stroke):
         painter.drawRect(self.center_x - self.width/2.0, self.center_y - self.height/2.0,
                         self.width, self.height)
 
-type_to_class = dict(polyline = PolylineStroke, circle = CircularStroke, bezier = BezierStroke, rect = RectangularStroke)
+type_to_class = dict(polyline = PolylineStroke, circle = CircularStroke, bezier = BezierStroke, rect = RectangularStroke, segment = SegmentStroke)
 
 class Canvas(QtWidgets.QWidget):
     def __init__(self, parent):
@@ -696,6 +755,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.straight_mode = self.toolbar.addAction("Straight")
         self.straight_mode.setCheckable(True)
         mode_group.addAction(self.straight_mode)
+        self.segment_mode = self.toolbar.addAction("Segment")
+        self.segment_mode.setCheckable(True)
+        mode_group.addAction(self.segment_mode)
         self.circle_mode = self.toolbar.addAction("Circle")
         self.circle_mode.setCheckable(True)
         mode_group.addAction(self.circle_mode)
@@ -726,6 +788,8 @@ class MainWindow(QtWidgets.QMainWindow):
             return 'circle'
         elif self.rect_mode.isChecked():
             return 'rect'
+        elif self.segment_mode.isChecked():
+            return 'segment'
         else:
             return None
 

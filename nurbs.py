@@ -2,6 +2,7 @@
 # License-Filename: LICENSE
 
 import numpy as np
+import scipy.optimize
 from math import pi, sqrt
 
 import knotvector as sv_knotvector
@@ -361,4 +362,71 @@ class SvNurbsCurve(object):
             segments.append(segment)
         segments.append(rest)
         return segments
+
+class LineEquation2D(object):
+    def __init__(self, a, b, c):
+        epsilon = 1e-8
+        if abs(a) < epsilon and abs(b) < epsilon:
+            raise Exception(f"Direction is (nearly) zero: {a}, {b}")
+        self.a = a
+        self.b = b
+        self.c = c
+
+    def __repr__(self):
+        return f"{self.a}*x + {self.b}*y + {self.c} = 0"
+
+    def distance_to_point(self, point):
+        a, b, c = self.a, self.b, self.c
+        x, y = tuple(point)
+        value = a*x + b*y + c
+        numerator = abs(value)
+        denominator = sqrt(a*a + b*b)
+        return numerator / denominator
+
+    def projection_of_point(self, point):
+        normal = np.array([self.a, self.b])
+        normal = normal / np.linalg.norm(normal)
+        distance = self.distance_to_point(point)
+        sign = self.side_of_point(point)
+        return np.array(point) - sign * distance * normal
+
+    def projection_of_points(self, points):
+        return [self.projection_of_point(p) for p in points]
+
+    def side_of_point(self, point, eps=1e-8):
+        a, b, c = self.a, self.b, self.c
+        x, y = tuple(point)
+        value = a*x + b*y + c
+        if abs(value) < eps:
+            return 0
+        elif value > 0:
+            return +1
+        else:
+            return -1
+
+    def projection_endpoints(self, points):
+        points = np.asarray(points)
+        direction = np.array([self.b, -self.a])
+        dots = (points * direction).sum(axis=1)
+        min_idx, max_idx = dots.argmin(), dots.argmax()
+        p1 = self.projection_of_point(points[min_idx])
+        p2 = self.projection_of_point(points[max_idx])
+        return p1, p2
+
+    @staticmethod
+    def approximate(points):
+        points = np.asarray(points)
+        m = len(points)
+        ctr = points.mean(axis=0)
+        points_centered = points - ctr
+        M = points_centered.T @ points_centered
+        eigenvalues, eigenvectors = np.linalg.eig(M)
+        l1, l2 = eigenvalues
+        if abs(l1) > abs(l2):
+            v1, v2 = eigenvectors[0]
+        else:
+            v1, v2 = eigenvectors[1]
+        a, b = v2, v1
+        c = -a * ctr[0] - b * ctr[1]
+        return LineEquation2D(a, b, c)
 
