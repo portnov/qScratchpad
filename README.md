@@ -42,5 +42,13 @@ Prerequisites
 * Python 3.7+
 * PyQt5
 
+Running
+-------
+
+    $ ./qscratchpad.py
+
+License
+-------
+
 License: GPLv3.
 
