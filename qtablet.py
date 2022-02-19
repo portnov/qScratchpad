@@ -3,6 +3,7 @@
 import sys
 import numpy as np
 import scipy.interpolate
+import scipy.optimize
 from math import sqrt
 import json
 import gzip
@@ -63,13 +64,17 @@ class PolylineStroke(Stroke):
         stroke.is_finished = self.is_finished
         return stroke
 
-    def recognize_any(self, prefer_straight=False, use_circles=True):
+    def recognize_any(self, mode):
         points = [(pt.x(), pt.y()) for pt in self.points]
-        if use_circles:
+        if mode == 'circle':
             circle = CircularStroke.recognize(points)
             if circle:
                 return circle
-        if prefer_straight:
+        elif mode == 'rect':
+            rect = RectangularStroke.recognize(points)
+            if rect is not None:
+                return rect
+        elif mode == 'straight':
             bezier = BezierStroke.recognize(points, weights=self.weights, smoothing=None, degree=1)
             if bezier is not None:
                 return bezier
@@ -78,6 +83,7 @@ class PolylineStroke(Stroke):
             if bezier is not None:
                 return bezier
         print(f"polyline {len(self.points)}")
+        return None
 
 class CircularStroke(Stroke):
     def __init__(self):
@@ -295,11 +301,81 @@ class BezierStroke(Stroke):
                 path.cubicTo(ct_points[0], ct_points[1], ct_points[2])
         painter.drawPath(path)
 
-type_to_class = dict(polyline = PolylineStroke, circle = CircularStroke, bezier = BezierStroke)
+class RectangularStroke(Stroke):
+    def __init__(self):
+        self.center_x = None
+        self.center_y = None
+        self.width = None
+        self.height = None
+        self.is_finished = False
+
+    @classmethod
+    def recognize(cls, points):
+        points = np.asarray(points)
+        bbox = nurbs.BoundingBox.calc(points)
+        center_x = bbox.x0 + bbox.width / 2.0
+        center_y = bbox.y0 + bbox.height / 2.0
+        points = points - np.array([center_x, center_y])
+
+        def goal(xs):
+            width2 = xs[0]
+            height2 = xs[1]
+
+            d_up = abs(points[:,1] - height2)
+            d_down = abs(points[:,1] + height2)
+            d_right = abs(points[:,0] - width2)
+            d_left = abs(points[:,0] + width2)
+            d = np.stack((d_up, d_down, d_right, d_left)).min(axis=0)
+            return d.sum()
+        
+        x0 = np.array([bbox.width/2.0, bbox.height/2.0])
+        tol = min(bbox.width, bbox.height) * 0.07
+        res = scipy.optimize.minimize(goal, x0, method='BFGS', tol=tol)
+        if not res.success:
+            print(res.message)
+            return None
+        
+        stroke = RectangularStroke()
+        stroke.center_x = center_x
+        stroke.center_y = center_y
+        stroke.width = res.x[0]*2.0
+        stroke.height = res.x[1]*2.0
+        stroke.is_finished = True
+        return stroke
+
+    def to_json(self):
+        return dict(center = [self.center_x, self.center_y], width = self.width, height = self.height, type='rect')
+
+    @classmethod
+    def from_json(cls, data):
+        stroke = RectangularStroke()
+        stroke.center_x, stroke_center_y = data['center']
+        stroke.width = data['width']
+        stroke.height = data['height']
+        stroke.is_finished = True
+        return stroke
+
+    def transformed(self, transform):
+        stroke = RectangularStroke()
+        ct = transform.map(QtCore.QPointF(self.center_x, self.center_y))
+        stroke.center_x = ct.x()
+        stroke.center_y = ct.y()
+        scale = sqrt(transform.determinant())
+        stroke.width = scale * self.width
+        stroke.height = scale * self.height
+        stroke.is_finished = self.is_finished
+        return stroke
+
+    def paint(self, painter):
+        painter.drawRect(self.center_x - self.width/2.0, self.center_y - self.height/2.0,
+                        self.width, self.height)
+
+type_to_class = dict(polyline = PolylineStroke, circle = CircularStroke, bezier = BezierStroke, rect = RectangularStroke)
 
 class Canvas(QtWidgets.QWidget):
     def __init__(self, parent):
         QtWidgets.QWidget.__init__(self, parent)
+        self.window = parent
         self.resize(1000, 1000)
         self.setAutoFillBackground(True)
         self.setAttribute(QtCore.Qt.WA_TabletTracking)
@@ -409,9 +485,10 @@ class Canvas(QtWidgets.QWidget):
         stroke = self._current_stroke
         if stroke is None:
             return
-        prefer_straight = QtWidgets.QApplication.keyboardModifiers() & QtCore.Qt.ShiftModifier
-        use_circles = QtWidgets.QApplication.keyboardModifiers() & QtCore.Qt.ControlModifier
-        recognized = stroke.recognize_any(prefer_straight, use_circles)
+        mode = self.window._get_mode()
+        #prefer_straight = QtWidgets.QApplication.keyboardModifiers() & QtCore.Qt.ShiftModifier
+        #use_circles = QtWidgets.QApplication.keyboardModifiers() & QtCore.Qt.ControlModifier
+        recognized = stroke.recognize_any(mode)
         if recognized is not None:
             self._current_stroke = recognized
         return recognized
@@ -559,6 +636,36 @@ class MainWindow(QtWidgets.QMainWindow):
         save.triggered.connect(self._on_save)
         export = self.toolbar.addAction("Export")
         export.triggered.connect(self._on_export)
+
+        self.toolbar.addSeparator()
+
+        mode_group = QtWidgets.QActionGroup(self)
+        mode_group.setExclusionPolicy(QtWidgets.QActionGroup.ExclusionPolicy.Exclusive)
+        self.bezier_mode = self.toolbar.addAction("Bezier")
+        self.bezier_mode.setCheckable(True)
+        self.bezier_mode.setChecked(True)
+        mode_group.addAction(self.bezier_mode)
+        self.straight_mode = self.toolbar.addAction("Straight")
+        self.straight_mode.setCheckable(True)
+        mode_group.addAction(self.straight_mode)
+        self.circle_mode = self.toolbar.addAction("Circle")
+        self.circle_mode.setCheckable(True)
+        mode_group.addAction(self.circle_mode)
+        self.rect_mode = self.toolbar.addAction("Rectangle")
+        self.rect_mode.setCheckable(True)
+        mode_group.addAction(self.rect_mode)
+
+    def _get_mode(self):
+        if self.bezier_mode.isChecked():
+            return 'bezier'
+        elif self.straight_mode.isChecked():
+            return 'straight'
+        elif self.circle_mode.isChecked():
+            return 'circle'
+        elif self.rect_mode.isChecked():
+            return 'rect'
+        else:
+            return None
 
     def _on_new(self, checked=False):
         self.canvas.empty()
