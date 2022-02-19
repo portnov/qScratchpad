@@ -17,6 +17,11 @@ Key features:
 * Simple panning with middle mouse/tablet button, and zooming with mouse/tablet wheel
 * Own file format (`json.gz`) for loading/saving; support for exporting PNG files.
 
+The idea is to let you think about whatever do you want to think about, and not
+about "should I draw this line red instead of blue" or "these boxes are not
+alighed nice enough". For this, only simple drawing features are available: you
+just draw lines, currently even without ability to fill them.
+
 Main object that qScratchpad allows you to draw is Bezier splines - but do not
 worry, it does not ask you to manually move the control points. Instead, you
 just draw, and the application draws the curve. Bezier logic is used mainly for
