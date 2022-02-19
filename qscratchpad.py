@@ -636,18 +636,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(self.canvas)
         QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_CompressHighFrequencyEvents)
 
-        new = self.toolbar.addAction("New")
+        new = self.toolbar.addAction(QtGui.QIcon.fromTheme("document-new"), "New")
         new.triggered.connect(self._on_new)
-        load = self.toolbar.addAction("Load")
+        load = self.toolbar.addAction(QtGui.QIcon.fromTheme("document-open"), "Load")
         load.triggered.connect(self._on_load)
-        save = self.toolbar.addAction("Save")
+        save = self.toolbar.addAction(QtGui.QIcon.fromTheme("document-save"), "Save")
         save.triggered.connect(self._on_save)
         export = self.toolbar.addAction("Export")
         export.triggered.connect(self._on_export)
 
         self.toolbar.addSeparator()
 
-        undo = self.toolbar.addAction("Undo")
+        undo = self.toolbar.addAction(QtGui.QIcon.fromTheme("edit-undo"), "Undo")
         undo.setShortcut(QtGui.QKeySequence("Ctrl+Z"))
         undo.triggered.connect(self._on_undo)
 
