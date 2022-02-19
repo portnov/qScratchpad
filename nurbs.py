@@ -383,6 +383,9 @@ class LineEquation2D(object):
         denominator = sqrt(a*a + b*b)
         return numerator / denominator
 
+    def distance_to_points(self, points):
+        return np.array([self.distance_to_point(p) for p in points])
+
     def projection_of_point(self, point):
         normal = np.array([self.a, self.b])
         normal = normal / np.linalg.norm(normal)

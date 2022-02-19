@@ -79,29 +79,54 @@ class PolylineStroke(Stroke):
 
     def recognize_any(self, mode):
         points = [(pt.x(), pt.y()) for pt in self.points]
-        if mode == 'circle':
-            circle = CircularStroke.recognize(points)
-            if circle:
+        if mode == 'auto':
+            methods = [CircularStroke.recognize,
+                        RectangularStroke.recognize,
+                        lambda p: BezierStroke.recognize(p, weights=self.weights, smoothing=None, degree=1),
+                        SegmentStroke.recognize,
+                        lambda p: BezierStroke.recognize(p, weights=self.weights, smoothing=0.1, degree=3)
+                    ]
+            best_err = None
+            best_stroke = None
+            for method in methods:
+                res = method(points)
+                if res is not None:
+                    err, stroke = res
+                    if best_err is None or err < best_err:
+                        best_err = err
+                        best_stroke = stroke
+            if best_stroke is not None:
+                best_stroke.thickness = self.thickness
+                return best_stroke
+
+        elif mode == 'circle':
+            res = CircularStroke.recognize(points)
+            if res:
+                err, circle = res
                 circle.thickness = self.thickness
                 return circle
         elif mode == 'rect':
-            rect = RectangularStroke.recognize(points)
-            if rect is not None:
+            res = RectangularStroke.recognize(points)
+            if res is not None:
+                err, rect = res
                 rect.thickness = self.thickness
                 return rect
         elif mode == 'straight':
-            bezier = BezierStroke.recognize(points, weights=self.weights, smoothing=None, degree=1)
-            if bezier is not None:
+            res = BezierStroke.recognize(points, weights=self.weights, smoothing=None, degree=1)
+            if res is not None:
+                err, bezier = res
                 bezier.thickness = self.thickness
                 return bezier
         elif mode == 'segment':
-            segment = SegmentStroke.recognize(points)
-            if segment is not None:
+            res = SegmentStroke.recognize(points)
+            if res is not None:
+                err, segment = res
                 segment.thickness = self.thickness
                 return segment
         else:
-            bezier = BezierStroke.recognize(points, weights=self.weights, smoothing=0.01, degree=3)
-            if bezier is not None:
+            res = BezierStroke.recognize(points, weights=self.weights, smoothing=0.01, degree=3)
+            if res is not None:
+                err, bezier = res
                 bezier.thickness = self.thickness
                 return bezier
         print(f"polyline {len(self.points)}")
@@ -201,17 +226,16 @@ class CircularStroke(Stroke):
         center = C[:2].T[0] + np.array([mean_x, mean_y])
         circle.center_x, circle.center_y = center
 
-        delta = abs((data_x**2 + data_y**2).mean() - r2)
-        sigma = sqrt(delta)
+        sigma = abs((data_x**2 + data_y**2)**0.5 - circle.radius).max()
 
         diam = 2*circle.radius
 
         rel_delta = sigma / diam
-        #print(f"C {sigma}, R2={r2}, Diam={diam}, {rel_delta}")
+        print(f"C {sigma}, R2={r2}, S={sigma}, {rel_delta}")
         if rel_delta < 0.5:
             print(f"Circle: R {circle.radius}")
             circle.is_finished = True
-            return circle
+            return sigma, circle
 
         return None
 
@@ -301,10 +325,13 @@ class BezierStroke(Stroke):
         knotvector = tck[0]
         control_points = np.stack(tck[1]).T
         degree = tck[2]
+        print("Bz", fp)
 
-        if degree == 3:
+        if degree == 3 and smoothing is not None:
             #print("B3", fp, smoothing)
             ok = (fp < smoothing * 1.5)
+        elif degree == 3 and smoothing is None:
+            ok = True
         elif degree == 1:
             n = len(control_points)
             print("B1", n, fp)
@@ -317,7 +344,7 @@ class BezierStroke(Stroke):
             stroke = BezierStroke(curve, degree)
             stroke.is_finished = True
             print("Bezier", degree, len(control_points))
-            return stroke
+            return fp, stroke
 
     def paint(self, painter):
         if not self.segments:
@@ -377,7 +404,10 @@ class SegmentStroke(Stroke):
         stroke = SegmentStroke()
         stroke.p1, stroke.p2 = line.projection_endpoints(data)
         stroke.is_finished = True
-        return stroke
+        distances = line.distance_to_points(data)
+        d = distances.max()
+        print("Segm", d)
+        return d, stroke
 
     def paint(self, painter):
         self.setup_pen(painter)
@@ -415,7 +445,7 @@ class RectangularStroke(Stroke):
             d_right = abs(points[:,0] - width2)
             d_left = abs(points[:,0] + width2)
             d = np.stack((d_up, d_down, d_right, d_left)).min(axis=0)
-            return d.sum()
+            return d.max()
         
         x0 = np.array([bbox.width/2.0, bbox.height/2.0])
         tol = min(bbox.width, bbox.height) * 0.07
@@ -430,7 +460,8 @@ class RectangularStroke(Stroke):
         stroke.width = res.x[0]*2.0
         stroke.height = res.x[1]*2.0
         stroke.is_finished = True
-        return stroke
+        print("Rect", res.fun)
+        return res.fun, stroke
 
     def to_json(self):
         return dict(center = [self.center_x, self.center_y], width = self.width, height = self.height,
@@ -748,6 +779,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         mode_group = QtWidgets.QActionGroup(self)
         mode_group.setExclusionPolicy(QtWidgets.QActionGroup.ExclusionPolicy.Exclusive)
+        self.auto_mode = self.toolbar.addAction("Auto")
+        self.auto_mode.setCheckable(True)
+        mode_group.addAction(self.auto_mode)
         self.bezier_mode = self.toolbar.addAction("Bezier")
         self.bezier_mode.setCheckable(True)
         self.bezier_mode.setChecked(True)
@@ -780,7 +814,9 @@ class MainWindow(QtWidgets.QMainWindow):
         return self.thickness_slider.value()
 
     def _get_mode(self):
-        if self.bezier_mode.isChecked():
+        if self.auto_mode.isChecked():
+            return 'auto'
+        elif self.bezier_mode.isChecked():
             return 'bezier'
         elif self.straight_mode.isChecked():
             return 'straight'
