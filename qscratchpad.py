@@ -913,6 +913,9 @@ if __name__ == "__main__":
     window = MainWindow()
     app.canvas = window.canvas
     window.show()
+    if len(sys.argv) == 2:
+        path = sys.argv[1]
+        window.canvas.load(path)
 
     sys.exit(app.exec_())
 
