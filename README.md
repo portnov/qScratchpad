@@ -36,5 +36,11 @@ when you press, for example, "Circle", and draw circles. Also there is an
 "Auto" mode, when you let qScratchpad decide, what your doodles remind it
 about.
 
+Prerequisites
+-------------
+
+* Python 3.7+
+* PyQt5
+
 License: GPLv3.
 
