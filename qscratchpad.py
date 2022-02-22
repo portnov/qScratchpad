@@ -831,7 +831,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.toolbar.addAction(undo)
         redo = self.undo_stack.createRedoAction(self, "Redo")
         redo.setIcon(QtGui.QIcon.fromTheme("edit-redo"))
-        redo.setShortcut(QtGui.QKeySequence("Ctrl+R"))
+        redo.setShortcut(QtGui.QKeySequence("Ctrl+Y"))
         self.toolbar.addAction(redo)
 
         self.toolbar.addSeparator()

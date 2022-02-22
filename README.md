@@ -38,11 +38,30 @@ about.
 
 ![demo](https://user-images.githubusercontent.com/284644/155070924-8a6f4b38-d175-4cad-9791-4d163763208c.png)
 
+Keyboard Shortcuts
+------------------
+
+* The usual:
+  * Ctrl-N - new doodle
+  * Ctrl-O - open doodle
+  * Ctrl-S - save current doodle
+  * Ctrl-Shift-S - save as
+  * Ctrl-Z - undo
+  * Ctrl-Y - redo
+* Ctrl-E - export to PNG
+* A - Auto mode
+* B - Bezier mode
+* C - Circle mode
+* R - Rectangles mode
+* S - Segments mode
+* T - Straightened lines mode
+
 Prerequisites
 -------------
 
 * Python 3.7+
 * PyQt5
+* SciPy
 
 Running
 -------
