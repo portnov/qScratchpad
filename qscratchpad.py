@@ -555,6 +555,7 @@ class Canvas(QtWidgets.QWidget):
     def empty(self):
         self.strokes = []
         self._redraw_pixmap()
+        self.window.undo_stack.clear()
         self.window.undo_stack.setClean()
         self.update()
 
@@ -564,6 +565,7 @@ class Canvas(QtWidgets.QWidget):
             data = json.loads(text.decode('utf-8'))
             self.from_json(data)
         self.current_file_path = path
+        self.window.undo_stack.clear()
         self.window.undo_stack.setClean()
         print("Loaded")
 
