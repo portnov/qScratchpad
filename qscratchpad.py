@@ -497,6 +497,19 @@ class RectangularStroke(Stroke):
 
 type_to_class = dict(polyline = PolylineStroke, circle = CircularStroke, bezier = BezierStroke, rect = RectangularStroke, segment = SegmentStroke)
 
+class StrokeCommand(QtWidgets.QUndoCommand):
+    def __init__(self, stroke, canvas, parent=None):
+        super().__init__(parent)
+        self.setText("Draw stroke")
+        self.stroke = stroke
+        self.canvas = canvas
+
+    def redo(self):
+        self.canvas.do_stroke(self.stroke)
+
+    def undo(self):
+        self.canvas.undo_stroke()
+
 class Canvas(QtWidgets.QWidget):
     def __init__(self, parent):
         QtWidgets.QWidget.__init__(self, parent)
@@ -543,14 +556,6 @@ class Canvas(QtWidgets.QWidget):
         self.strokes = []
         self._redraw_pixmap()
         self.update()
-
-    def undo(self):
-        if not self.strokes:
-            return
-        self.strokes = self.strokes[:-1]
-        self._redraw_pixmap()
-        self.update()
-
 
     def load(self, path):
         with gzip.open(path) as gz:
@@ -645,10 +650,8 @@ class Canvas(QtWidgets.QWidget):
             self._current_stroke = recognized
         return recognized
 
-    def _begin_stroke(self, stroke):
+    def do_stroke(self, stroke):
         self._current_stroke = stroke
-
-    def _end_stroke(self):
         self.strokes.append(self._current_stroke)
         pixmap, is_empty = self._get_pixmap(self.width(), self.height())
         painter = self._setup_painter(pixmap)
@@ -659,6 +662,19 @@ class Canvas(QtWidgets.QWidget):
         self.pixmap = pixmap
         self._current_stroke = None
         self.update(self.rect())
+
+    def undo_stroke(self):
+        if not self.strokes:
+            return
+        self.strokes = self.strokes[:-1]
+        self._redraw_pixmap()
+        self.update()
+
+    def _begin_stroke(self, stroke):
+        self._current_stroke = stroke
+
+    def _end_stroke(self):
+        self.window.undo_stack.push(StrokeCommand(self._current_stroke, self))
     
     def _update_stroke(self, stroke):
         self._current_stroke = stroke
@@ -794,9 +810,16 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.toolbar.addSeparator()
 
-        undo = self.toolbar.addAction(QtGui.QIcon.fromTheme("edit-undo"), "Undo")
-        undo.setShortcut(QtGui.QKeySequence("Ctrl+Z"))
-        undo.triggered.connect(self._on_undo)
+        self.undo_stack = QtWidgets.QUndoStack(self)
+
+        undo = self.undo_stack.createUndoAction(self, "Undo")
+        undo.setIcon(QtGui.QIcon.fromTheme("edit-undo"))
+        undo.setShortcut(QtGui.QKeySequence.Undo)
+        self.toolbar.addAction(undo)
+        redo = self.undo_stack.createRedoAction(self, "Redo")
+        redo.setIcon(QtGui.QIcon.fromTheme("edit-redo"))
+        redo.setShortcut(QtGui.QKeySequence("Ctrl+R"))
+        self.toolbar.addAction(redo)
 
         self.toolbar.addSeparator()
 
@@ -887,9 +910,6 @@ class MainWindow(QtWidgets.QMainWindow):
             img = self.canvas.to_image()
             img.save(path)
             print("Exported")
-
-    def _on_undo(self, checked=False):
-        self.canvas.undo()
 
 class Application(QtWidgets.QApplication):
     def __init__(self, *args, **kwargs):
