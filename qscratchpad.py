@@ -555,6 +555,7 @@ class Canvas(QtWidgets.QWidget):
     def empty(self):
         self.strokes = []
         self._redraw_pixmap()
+        self.window.undo_stack.setClean()
         self.update()
 
     def load(self, path):
@@ -563,18 +564,23 @@ class Canvas(QtWidgets.QWidget):
             data = json.loads(text.decode('utf-8'))
             self.from_json(data)
         self.current_file_path = path
+        self.window.undo_stack.setClean()
         print("Loaded")
 
     def save(self):
         if not self.current_file_path:
             raise Exception("This should not be called at this time")
-        self.save_as(self, self.current_file_path)
+        self.save_as(self.current_file_path)
 
     def save_as(self, path):
         with gzip.open(path, 'wb') as gz:
             data = json.dumps(self.to_json()).encode('utf-8')
             gz.write(data)
+        self.window.undo_stack.setClean()
         print("Saved")
+
+    def has_unsaved_changes(self):
+        return not self.window.undo_stack.isClean()
 
     def _bounding_box(self):
         return nurbs.BoundingBox.union_list([stroke.get_bounding_box() for stroke in self.strokes])
@@ -887,16 +893,48 @@ class MainWindow(QtWidgets.QMainWindow):
             return None
 
     def _on_new(self, checked=False):
-        self.current_file_path = None
-        self.canvas.empty()
+        def do():
+            self.current_file_path = None
+            self.canvas.empty()
+
+        if self.canvas.has_unsaved_changes():
+            res = QtWidgets.QMessageBox.question(self, "Confirmation",
+                    "There are unsaved changes. Do you really want to create a new doodle?",
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No | QtWidgets.QMessageBox.Save)
+
+            if res == QtWidgets.QMessageBox.Yes:
+                do()
+            elif res == QtWidgets.QMessageBox.No:
+                pass
+            elif res == QtWidgets.QMessageBox.Save:
+                self._on_save()
+                do()
+        else:
+            do()
 
     def _on_load(self, checked=False):
-        path,_ = QtWidgets.QFileDialog.getOpenFileName(self,
-                    "Open file",
-                    ".",
-                    "qScratchpad doodles (*.json.gz)")
-        if path:
-            self.canvas.load(path)
+        def do():
+            path,_ = QtWidgets.QFileDialog.getOpenFileName(self,
+                        "Open file",
+                        ".",
+                        "qScratchpad doodles (*.json.gz)")
+            if path:
+                self.canvas.load(path)
+
+        if self.canvas.has_unsaved_changes():
+            res = QtWidgets.QMessageBox.question(self, "Confirmation",
+                    "There are unsaved changes. Do you really want to load another doodle?",
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No | QtWidgets.QMessageBox.Save)
+
+            if res == QtWidgets.QMessageBox.Yes:
+                do()
+            elif res == QtWidgets.QMessageBox.No:
+                pass
+            elif res == QtWidgets.QMessageBox.Save:
+                self._on_save()
+                do()
+        else:
+            do()
 
     def _on_save(self, checked=False):
         if self.canvas.current_file_path:
@@ -921,6 +959,21 @@ class MainWindow(QtWidgets.QMainWindow):
             img = self.canvas.to_image()
             img.save(path)
             print("Exported")
+
+    def closeEvent(self, ev):
+        if self.canvas.has_unsaved_changes():
+            res = QtWidgets.QMessageBox.question(self, "Exit confirmation",
+                    "There are unsaved changes. Do you really want to close qScratchpad?",
+                    QtWidgets.QMessageBox.Close | QtWidgets.QMessageBox.No | QtWidgets.QMessageBox.Save)
+            if res == QtWidgets.QMessageBox.Close:
+                ev.accept()
+            elif res == QtWidgets.QMessageBox.No:
+                ev.ignore()
+            elif res == QtWidgets.QMessageBox.Save:
+                self._on_save()
+                ev.accept()
+        else:
+            super().closeEvent(ev)
 
 class Application(QtWidgets.QApplication):
     def __init__(self, *args, **kwargs):
