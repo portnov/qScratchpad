@@ -651,12 +651,7 @@ class Canvas(QtWidgets.QWidget):
         if stroke is None:
             return
         mode = self.window._get_mode()
-        #prefer_straight = QtWidgets.QApplication.keyboardModifiers() & QtCore.Qt.ShiftModifier
-        #use_circles = QtWidgets.QApplication.keyboardModifiers() & QtCore.Qt.ControlModifier
-        recognized = stroke.recognize_any(mode)
-        if recognized is not None:
-            self._current_stroke = recognized
-        return recognized
+        return stroke.recognize_any(mode)
 
     def do_stroke(self, stroke):
         self._current_stroke = stroke
@@ -684,10 +679,6 @@ class Canvas(QtWidgets.QWidget):
     def _end_stroke(self):
         self.window.undo_stack.push(StrokeCommand(self._current_stroke, self))
     
-    def _update_stroke(self, stroke):
-        self._current_stroke = stroke
-        self.update(self.rect())
-
     def _to_scene(self, pos):
         inv, ok = self.transformation.inverted()
         return inv.map(pos)
@@ -717,7 +708,8 @@ class Canvas(QtWidgets.QWidget):
             self.device_down = False
             recognized = self._recognize_stroke()
             if recognized is not None:
-                self._update_stroke(recognized)
+                self._current_stroke = recognized
+                self.update(self.rect())
             self._end_stroke()
         if self.pan_start_pos:
             self.pan_start_pos = None
