@@ -36,6 +36,8 @@ when you press, for example, "Circle", and draw circles. Also there is an
 "Auto" mode, when you let qScratchpad decide, what your doodles remind it
 about.
 
+![demo](https://user-images.githubusercontent.com/284644/155070924-8a6f4b38-d175-4cad-9791-4d163763208c.png)
+
 Prerequisites
 -------------
 
