@@ -77,14 +77,14 @@ class PolylineStroke(Stroke):
         stroke.is_finished = self.is_finished
         return stroke
 
-    def recognize_any(self, mode):
+    def recognize_any(self, mode, scale, smoothing=1.0):
         points = [(pt.x(), pt.y()) for pt in self.points]
         if mode == 'auto':
             methods = [CircularStroke.recognize,
                         RectangularStroke.recognize,
                         lambda p: BezierStroke.recognize(p, weights=self.weights, smoothing=None, degree=1),
                         SegmentStroke.recognize,
-                        lambda p: BezierStroke.recognize(p, weights=self.weights, smoothing=0.1, degree=3)
+                        lambda p: BezierStroke.recognize(p, weights=self.weights, smoothing=0.5*smoothing/scale, degree=3)
                     ]
             best_err = None
             best_stroke = None
@@ -124,7 +124,7 @@ class PolylineStroke(Stroke):
                 segment.thickness = self.thickness
                 return segment
         else:
-            res = BezierStroke.recognize(points, weights=self.weights, smoothing=0.01, degree=3)
+            res = BezierStroke.recognize(points, weights=self.weights, smoothing=0.05*smoothing/scale, degree=3)
             if res is not None:
                 err, bezier = res
                 bezier.thickness = self.thickness
@@ -288,30 +288,41 @@ class BezierStroke(Stroke):
     @classmethod
     def recognize(cls, points, weights, smoothing = 0.1, degree = 3):
         points = np.asarray(points)
-        if len(points) < degree+1:
+        n_orig = len(points)
+        if n_orig < degree+1:
+            print(f"Number of input points n={n_orig} is too small for degree={degree}")
             return None
         if weights is not None:
             weights = np.asarray(weights)
-        if weights is not None and len(points) != len(weights):
+        if weights is not None and n_orig != len(weights):
             raise Exception("Number of weights must be equal to number of points")
 
-        filter_doubles = 0.1
+        diam = calc_diameter(points)
+        filter_doubles = 0.0005 * diam
         good = np.where(np.linalg.norm(np.diff(points, axis=0), axis=1) > filter_doubles)
         points = np.r_[points[good], points[-1][np.newaxis]]
         if weights is not None:
             weights = np.r_[weights[good], weights[-1]]
             weights[abs(weights) < MIN_WEIGHT] = MIN_WEIGHT
 
+        n = len(points)
+        if n < degree+1:
+            print(f"Number of filtered points n={n} is too small for degree={degree}")
+            return None
         points = points.T
 
         kwargs = dict()
         kwargs['k'] = degree
         if smoothing is not None:
-            smoothing = smoothing * calc_diameter(points)
+            print(f"B smoothing={smoothing}, diam={diam}, N_orig={n_orig}, filter_doubles={filter_doubles}, N={n}")
+            smoothing = smoothing * diam
             kwargs['s'] = smoothing
         kwargs['full_output'] = True
+        
         if weights is not None:
-            kwargs['w'] = np.asarray(weights)
+            ws = np.linspace(0.0, 1.0, num=len(weights))
+            ws = 1.0 - 15*(ws * (1.0 - ws))**2
+            kwargs['w'] = np.asarray(weights) * ws
 
         try:
             result = scipy.interpolate.splprep(points, **kwargs)
@@ -325,11 +336,11 @@ class BezierStroke(Stroke):
         knotvector = tck[0]
         control_points = np.stack(tck[1]).T
         degree = tck[2]
-        print("Bz", fp)
+        print("Bz", fp, n)
 
         if degree == 3 and smoothing is not None:
             #print("B3", fp, smoothing)
-            ok = (fp < smoothing * 1.5)
+            ok = (fp < smoothing * 1.1)
         elif degree == 3 and smoothing is None:
             ok = True
         elif degree == 1:
@@ -641,7 +652,7 @@ class Canvas(QtWidgets.QWidget):
 
     def _new_stroke(self):
         stroke = PolylineStroke()
-        stroke.thickness = self.window._get_thickness()
+        stroke.thickness = self.window.get_thickness()
         return stroke
 
     def _recognize_stroke(self):
@@ -651,7 +662,7 @@ class Canvas(QtWidgets.QWidget):
         if stroke is None:
             return
         mode = self.window._get_mode()
-        return stroke.recognize_any(mode)
+        return stroke.recognize_any(mode, self.scale(), self.window.get_smoothing())
 
     def do_stroke(self, stroke):
         self._current_stroke = stroke
@@ -857,18 +868,34 @@ class MainWindow(QtWidgets.QMainWindow):
         mode_group.addAction(self.rect_mode)
 
         self.toolbar.addSeparator()
-
+        label = QtWidgets.QLabel(self)
+        label.setText("Thickness:")
+        self.toolbar.addWidget(label)
         self.thickness_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal, self)
         self.thickness_slider.setMinimum(0)
         self.thickness_slider.setMaximum(20)
         self.toolbar.addWidget(self.thickness_slider)
 
+        self.toolbar.addSeparator()
+        label = QtWidgets.QLabel(self)
+        label.setText("Smoothing:")
+        self.toolbar.addWidget(label)
+        self.smoothing_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal, self)
+        self.smoothing_slider.setMinimum(0)
+        self.smoothing_slider.setMaximum(100)
+        self.smoothing_slider.setValue(20)
+        self.toolbar.addWidget(self.smoothing_slider)
+
         self.canvas = Canvas(self)
         self.setCentralWidget(self.canvas)
         QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_CompressHighFrequencyEvents)
 
-    def _get_thickness(self):
+    def get_thickness(self):
         return self.thickness_slider.value()
+
+    def get_smoothing(self):
+        n = self.smoothing_slider.value()
+        return float(n) / 100.0
 
     def _get_mode(self):
         if self.auto_mode.isChecked():
