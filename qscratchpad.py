@@ -171,8 +171,8 @@ class CircularStroke(Stroke):
 
     def paint(self, painter):
         self.setup_pen(painter)
-        painter.drawEllipse(self.center_x - self.radius, self.center_y - self.radius,
-                            2*self.radius, 2*self.radius)
+        painter.drawEllipse(QtCore.QRectF(self.center_x - self.radius, self.center_y - self.radius,
+                            2*self.radius, 2*self.radius))
 
     @classmethod
     def recognize(cls, data, mean_is_zero=False):
@@ -503,8 +503,8 @@ class RectangularStroke(Stroke):
 
     def paint(self, painter):
         self.setup_pen(painter)
-        painter.drawRect(self.center_x - self.width/2.0, self.center_y - self.height/2.0,
-                        self.width, self.height)
+        painter.drawRect(QtCore.QRectF(self.center_x - self.width/2.0, self.center_y - self.height/2.0,
+                        self.width, self.height))
 
 type_to_class = dict(polyline = PolylineStroke, circle = CircularStroke, bezier = BezierStroke, rect = RectangularStroke, segment = SegmentStroke)
 
@@ -840,7 +840,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.toolbar.addSeparator()
 
         mode_group = QtWidgets.QActionGroup(self)
-        mode_group.setExclusionPolicy(QtWidgets.QActionGroup.ExclusionPolicy.Exclusive)
+        mode_group.setExclusive(True)
+        #mode_group.setExclusionPolicy(QtWidgets.QActionGroup.ExclusionPolicy.Exclusive)
         self.auto_mode = self.toolbar.addAction("Auto")
         self.auto_mode.setShortcut(QtGui.QKeySequence("A"))
         self.auto_mode.setCheckable(True)
